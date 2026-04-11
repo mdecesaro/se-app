@@ -23,7 +23,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              "Grid_Ai Connection",
+              "FlyFeet Connection",
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
@@ -31,7 +31,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
               ),
             ),
             const Text(
-              "Connect your Grid_Ai to start training",
+              "Connect your FlyFeet to start training",
               style: TextStyle(color: Colors.white54),
             ),
             const SizedBox(height: 32),
@@ -62,7 +62,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _btService.isScanning ? "SCANNING FOR DEVICES..." : "SEARCH GRID_AI Device",
+                        _btService.isScanning ? "SCANNING FOR DEVICES..." : "SEARCH FLYFEET D-MAT",
                         style: TextStyle(
                           color: colorScheme.primary,
                           fontWeight: FontWeight.bold,

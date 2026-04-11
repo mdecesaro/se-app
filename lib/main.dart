@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'screens/bluetooth_screen.dart';
+import 'screens/me_screen.dart'; // Import the new screen
 import 'services/bluetooth_service.dart';
 import 'services/database_service.dart';
 import 'models/athlete.dart';
@@ -52,7 +53,6 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-    // Reinforce immersive mode when the main screen loads
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadAthlete();
   }
@@ -88,7 +88,7 @@ class _MainScreenState extends State<MainScreen> {
                   case 2:
                     return const BluetoothScreen();
                   case 3:
-                    return const Center(child: Text('Me', style: TextStyle(color: Colors.white, fontSize: 40)));
+                    return MeScreen(athlete: _currentAthlete); // Show the MeScreen
                   default:
                     return const Center(child: Text('Page not found', style: TextStyle(color: Colors.white, fontSize: 40)));
                 }
