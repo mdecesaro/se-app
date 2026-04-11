@@ -52,6 +52,8 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    // Reinforce immersive mode when the main screen loads
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadAthlete();
   }
 
@@ -80,9 +82,13 @@ class _MainScreenState extends State<MainScreen> {
               builder: (context, child) {
                 switch (_controller.selectedIndex) {
                   case 0:
-                    return const BluetoothScreen();
+                    return const Center(child: Text('Dashboard', style: TextStyle(color: Colors.white, fontSize: 40)));
                   case 1:
-                    return const Center(child: Text('Settings', style: TextStyle(color: Colors.white, fontSize: 40)));
+                    return const Center(child: Text('Exercise', style: TextStyle(color: Colors.white, fontSize: 40)));
+                  case 2:
+                    return const BluetoothScreen();
+                  case 3:
+                    return const Center(child: Text('Me', style: TextStyle(color: Colors.white, fontSize: 40)));
                   default:
                     return const Center(child: Text('Page not found', style: TextStyle(color: Colors.white, fontSize: 40)));
                 }
@@ -114,7 +120,7 @@ class ExampleSidebarX extends StatelessWidget {
       theme: SidebarXTheme(
         margin: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF3D3D3D), // Even lighter background
+          color: const Color(0xFF3D3D3D),
           borderRadius: BorderRadius.circular(20),
         ),
         hoverColor: colorScheme.primaryContainer.withOpacity(0.1),
@@ -133,7 +139,7 @@ class ExampleSidebarX extends StatelessWidget {
       extendedTheme: const SidebarXTheme(
         width: 210,
         decoration: BoxDecoration(
-          color: Color(0xFF353535), // Even lighter for extended
+          color: Color(0xFF353535),
           borderRadius: BorderRadius.only(topRight: Radius.circular(20), bottomRight: Radius.circular(20)),
         ),
       ),
@@ -162,8 +168,10 @@ class ExampleSidebarX extends StatelessWidget {
         );
       },
       items: const [
-        SidebarXItem(icon: Icons.bluetooth, label: 'Conectar'),
-        SidebarXItem(icon: Icons.settings, label: 'Configurações'),
+        SidebarXItem(icon: Icons.dashboard_outlined, label: 'Dashboard'),
+        SidebarXItem(icon: Icons.fitness_center, label: 'Exercise'),
+        SidebarXItem(icon: Icons.bluetooth, label: 'Device'),
+        SidebarXItem(icon: Icons.person_outline, label: 'Me'),
       ],
     );
   }
