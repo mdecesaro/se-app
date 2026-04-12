@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'screens/bluetooth_screen.dart';
-import 'screens/me_screen.dart'; // Import the new screen
+import 'screens/me_screen.dart';
+import 'screens/exercise_screen.dart'; // Import the new screen
 import 'services/bluetooth_service.dart';
 import 'services/database_service.dart';
 import 'models/athlete.dart';
@@ -85,7 +86,7 @@ class _MainScreenState extends State<MainScreen> {
                   case 0:
                     return const Center(child: Text('Dashboard', style: TextStyle(color: Colors.white, fontSize: 40)));
                   case 1:
-                    return const Center(child: Text('Exercise', style: TextStyle(color: Colors.white, fontSize: 40)));
+                    return const ExerciseScreen();
                   case 2:
                     return const BluetoothScreen();
                   case 3:
