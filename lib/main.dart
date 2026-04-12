@@ -72,6 +72,7 @@ class _MainScreenState extends State<MainScreen> {
 
     return Scaffold(
       key: _key,
+      backgroundColor: const Color(0xFF121212), // Professional Dark Theme
       drawer: ExampleSidebarX(controller: _controller, athlete: _currentAthlete),
       body: Row(
         children: [
