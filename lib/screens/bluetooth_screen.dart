@@ -10,8 +10,19 @@ class BluetoothScreen extends StatefulWidget {
 
 class _BluetoothScreenState extends State<BluetoothScreen> {
   final _btService = AppBluetoothService();
-
   bool _isConnecting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // No specific listener needed here as we use the onUpdate callback in connect/scan
+  }
+
+  void _handleUpdate() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,6 +143,13 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
               _buildDetailRow("Firmware", _btService.firmwareVersion),
               _buildDetailRow("Sensors Found", _btService.sensorCount),
               _buildDetailRow("Registered to", _btService.registeredUser),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: () => _btService.performHandshake(_handleUpdate),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text("RETRY HANDSHAKE", style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
+              ),
             ],
           ),
         ),
@@ -201,12 +219,10 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                           : FilledButton(
                               onPressed: () async {
-                                setState(() => _isConnecting = true);
-                                await _btService.connect(r.device, onUpdate: () {
-                                  if (mounted) setState(() {});
-                                });
-                                if (mounted) setState(() => _isConnecting = false);
-                              },
+                          setState(() => _isConnecting = true);
+                          await _btService.connect(r.device, onUpdate: _handleUpdate);
+                          if (mounted) setState(() => _isConnecting = false);
+                        },
                               child: const Text("CONNECT"),
                             ),
                       ),

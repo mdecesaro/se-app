@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/exercise.dart';
+import '../models/evaluation_result.dart';
 import '../services/bluetooth_service.dart';
 import '../services/database_service.dart';
 
@@ -39,6 +40,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   Stopwatch stopwatch = Stopwatch();
   Timer? _timer;
   String formattedTime = "00:00.0";
+
+  // Stats from Hardware
+  int _hits = 0;
+  int _misses = 0;
+  int _currentTarget = -1;
+  String _correctColor = "#FFFFFF";
+  List<EvaluationResult> _results = [];
+  bool _isFinished = false;
+  bool _isWaitingForSet = false;
+  String _lastSentCommand = "";
+  int _countdownValue = -1; // -1 means no countdown
 
   @override
   void initState() {
@@ -79,23 +91,118 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     });
   }
 
-  void _startSession() {
+  String _buildProtocolCommand() {
+    try {
+      dynamic params = widget.exercise.parameters;
+      if (params is String) {
+        params = json.decode(params);
+      }
+      if (params is Map && params.containsKey('parameters')) {
+        params = params['parameters'];
+      }
+
+      // Format: SET|stimuli_count|manual|delay_range|rounds|colorhex
+      
+      // 1. stimuli_count
+      String count = params['stimuli_count']?.toString() ?? "10";
+
+      // 2. manual (0 = random)
+      String manual = (params['stimuli_generation_mode'] == "sequence") ? "1" : "0";
+
+      // 3. delay_range
+      String delay;
+      if (params['delay_type'] == "range") {
+        delay = "${params['delay_range_ms'][0]},${params['delay_range_ms'][1]}";
+      } else {
+        delay = params['delay_range_ms'][0].toString();
+      }
+
+      // 4. rounds
+      String rounds = params['execution_rounds']?.toString() ?? "1";
+
+      // 5. colorhex (remove #)
+      String color = (params['correct_color'] ?? "#FFFFFF").replaceAll("#", "");
+
+      return "SET|$count|$manual|$delay|$rounds|$color";
+    } catch (e) {
+      _addLog("Protocol Error: $e");
+      return "SET|10|0|500|1|FFFFFF";
+    }
+  }
+
+  void _startSession() async {
+    String setCommand = _buildProtocolCommand();
+    
+    // Extract color for UI
+    List<String> parts = setCommand.split('|');
+    if (parts.length >= 6) {
+      _correctColor = "#" + parts[5];
+    }
+
     setState(() {
       _isSessionStarted = true;
-      stopwatch.reset();
-      stopwatch.start();
-      _addLog("Session Started: ${widget.exercise.name}");
+      _isFinished = false;
+      _isWaitingForSet = true;
+      _hits = 0;
+      _misses = 0;
+      _results = [];
+      _currentTarget = -1;
+      formattedTime = "00:00.0";
+      _addLog("➡️ Enviado: SET");
     });
 
+    // 1. Send SET
+    _lastSentCommand = setCommand;
+    await _bluetoothService.sendMessage("$setCommand\n");
+  }
+
+  void _onSetConfirmed() async {
+    if (!mounted || !_isWaitingForSet) return;
+    
+    setState(() {
+      _isWaitingForSet = false;
+      _countdownValue = 5;
+    });
+
+    _addLog("✔️ SET confirmado. Iniciando contagem regressiva...");
+
+    Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      setState(() {
+        if (_countdownValue > 0) {
+          _countdownValue--;
+        } else {
+          _countdownValue = -1; // Hide countdown
+          timer.cancel();
+          _sendStartCommand();
+        }
+      });
+    });
+  }
+
+  void _sendStartCommand() async {
+    _addLog("🚀 Enviando START...");
+    
+    // Start the elapsed timer ONLY now
+    stopwatch.reset();
+    stopwatch.start();
     _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (!mounted) return;
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       setState(() {
         final duration = stopwatch.elapsed;
         formattedTime = "${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}.${(duration.inMilliseconds % 1000 ~/ 100)}";
       });
     });
-    
-    _bluetoothService.sendMessage("START:${widget.exercise.code}\n");
+
+    _lastSentCommand = "START";
+    await _bluetoothService.sendMessage("START\n");
   }
 
   void _addLog(String message) {
@@ -116,6 +223,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _parseSensorData(String data) {
+    // Ignore echos and Handshake noise (Bluno feedback loop)
+    if (data == _lastSentCommand || 
+        data == "HANDSHAKE" ||
+        data.startsWith("SET|") && _lastSentCommand.contains("SET|")) {
+      return;
+    }
+
     if (data.startsWith("DATA:")) {
       try {
         String valuesPart = data.substring(5);
@@ -125,12 +239,105 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             sensorValues[i] = int.tryParse(splitValues[i]) ?? 0;
           }
         });
-      } catch (e) {
-        _addLog("Error parsing data");
-      }
+      } catch (e) {}
+    } else if (data == "SET_OK") {
+      _onSetConfirmed();
+    } else if (data.startsWith("EVT|")) {
+      _handleHardwareEvent(data);
+    } else if (data == "DONE") {
+      _addLog("🏁 DONE - Execução finalizada.");
+      _saveResultsToDatabase();
+      setState(() {
+        _isFinished = true;
+        _isSessionStarted = false;
+        _currentTarget = -1;
+        stopwatch.stop();
+        _timer?.cancel();
+      });
     } else {
-      _addLog("Hardware: $data");
+      _addLog("📨 [RAW]: $data");
     }
+  }
+
+  Future<void> _saveResultsToDatabase() async {
+    if (_results.isEmpty) return;
+    
+    try {
+      final db = await DatabaseService().database;
+      // We'll save each result point. In a real app, you might create a 'sessions' table first.
+      for (var result in _results) {
+        await db.insert('evaluation_results', {
+          ...result.toMap(),
+          'exercise_id': widget.exercise.id,
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+      }
+      _addLog("💾 Dados salvos com sucesso.");
+    } catch (e) {
+      _addLog("❌ Erro ao salvar dados: $e");
+    }
+  }
+
+  void _handleHardwareEvent(String evtLine) {
+    try {
+      List<String> parts = evtLine.split('|');
+      if (parts.length < 4) return;
+
+      String evtType = parts[1];
+      int round = int.tryParse(parts[2]) ?? 0;
+      int sensorId = int.tryParse(parts[3]) ?? 0;
+
+      // EVT|ON|round|sensorIdx
+      if (evtType == "ON") {
+        setState(() => _currentTarget = sensorId);
+        _addLog("Target ON: Sensor $sensorId");
+      }
+      // EVT|HIT|round|sensorIdx|ms|delay
+      else if (evtType == "HIT") {
+        int ms = int.tryParse(parts[4]) ?? 0;
+        int delay = int.tryParse(parts[5]) ?? 0;
+
+        _recordResult(round, sensorId, ms, delay);
+
+        setState(() {
+          _hits++;
+          _currentTarget = -1;
+        });
+        _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
+      }
+      // EVT|END|total_ms|hits|misses
+      else if (evtType == "END") {
+        _addLog("Session Summary: ${parts[3]} hits, ${parts[4]} misses");
+      }
+    } catch (e) {
+      _addLog("Parse Error: $e");
+    }
+  }
+
+  void _recordResult(int round, int sensorId, int reactionTimeMs, int delay) {
+    final sensorDef = _sensorDefinitions.firstWhere(
+      (s) => s.id == sensorId,
+      orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown"),
+    );
+
+    final result = EvaluationResult(
+      roundNum: round,
+      stimulusId: sensorId,
+      stimulusPosition: sensorDef.sector,
+      stimulusType: "color",
+      correctColor: _correctColor,
+      reactionTime: reactionTimeMs,
+      stimulusStart: 0, // Calculated on hardware
+      stimulusEnd: 0,   // Calculated on hardware
+      delayMs: delay,
+      elapsedSinceStart: stopwatch.elapsedMilliseconds,
+      error: 0,
+      footUsed: "unknown", // To be updated by athlete profile later
+      wrongStimulusId: 0,
+      distractorIdColor: [],
+    );
+
+    _results.add(result);
   }
 
   @override
@@ -180,9 +387,14 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                     children: [
                       Expanded(
                         child: Center(
-                          child: _isSessionStarted 
-                            ? _buildCanvas() 
-                            : _buildStartOverlay(),
+                          child: Stack(
+                            children: [
+                              _isSessionStarted 
+                                ? _buildCanvas() 
+                                : _buildStartOverlay(),
+                              if (_countdownValue >= 0) _buildCountdownOverlay(),
+                            ],
+                          ),
                         ),
                       ),
                       _buildStatsBar(),
@@ -232,6 +444,34 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     );
   }
 
+  Widget _buildCountdownOverlay() {
+    return Container(
+      color: Colors.black54,
+      width: double.infinity,
+      height: double.infinity,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text(
+              "GET READY",
+              style: TextStyle(color: Colors.white54, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 4),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              _countdownValue == 0 ? "GO!" : "$_countdownValue",
+              style: TextStyle(
+                color: _countdownValue == 0 ? Colors.greenAccent : Colors.orange,
+                fontSize: 180,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildStartOverlay() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -264,6 +504,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             painter: MatPainter(
               sensors: _sensorDefinitions,
               values: sensorValues,
+              currentTarget: _currentTarget,
+              correctColor: _correctColor,
             ),
           );
         },
@@ -272,6 +514,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   Widget _buildStatsBar() {
+    double avgRT = _results.isEmpty 
+        ? 0 
+        : _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(
@@ -281,10 +527,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildStat("HITS", "0"),
+          _buildStat("HITS", "$_hits"),
           _buildStat("TIME", formattedTime, isPrimary: true),
-          _buildStat("AVG SPEED", "0ms"),
-          _buildStat("MISS", "0"),
+          _buildStat("AVG SPEED", "${avgRT.toStringAsFixed(0)}ms"),
+          _buildStat("MISS", "$_misses"),
         ],
       ),
     );
@@ -308,47 +554,62 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 class MatPainter extends CustomPainter {
   final List<SensorDefinition> sensors;
   final List<int> values;
+  final int currentTarget;
+  final String correctColor;
 
-  MatPainter({required this.sensors, required this.values});
+  MatPainter({
+    required this.sensors, 
+    required this.values, 
+    required this.currentTarget,
+    required this.correctColor,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    
-    // Scale factor to translate CM-based coordinates to Screen Pixels
-    // The max coordinates are roughly +/- 30, so a divisor of 70-80 fits well.
     final double scale = size.shortestSide / 75;
     
-    // Adjusted sizes to prevent overlap (distance between sensors is ~15 units)
     final double hexSize = 7.5 * scale; 
     final double rectWidth = 6.0 * scale; 
     final double rectHeight = 1.2 * scale; 
     final double rectOffsetDeltaY = -4.5 * scale; 
 
+    // Parse correct color
+    Color targetColor;
+    try {
+      targetColor = Color(int.parse(correctColor.replaceAll('#', '0xFF')));
+    } catch (_) {
+      targetColor = Colors.orange;
+    }
+
     for (var sensor in sensors) {
-      // Position based on DB coordinates
       final pos = Offset(center.dx + (sensor.x * scale), center.dy + (sensor.y * scale));
       
       int val = sensor.id <= values.length ? values[sensor.id - 1] : 0;
       bool isPressed = val > 100;
+      bool isTarget = sensor.id == currentTarget;
 
       // 1. Draw the Hexagon (The Pad)
       final hexPaint = Paint()
         ..color = isPressed 
-            ? Colors.orange.withOpacity((val / 1023.0).clamp(0.3, 1.0)) 
-            : Colors.white.withOpacity(0.02)
+            ? targetColor.withOpacity((val / 1023.0).clamp(0.3, 1.0)) 
+            : isTarget 
+               ? targetColor.withOpacity(0.15)
+               : Colors.white.withOpacity(0.02)
         ..style = PaintingStyle.fill;
 
       final hexOutlinePaint = Paint()
-        ..color = isPressed ? Colors.orange : Colors.white12
+        ..color = isPressed || isTarget ? targetColor : Colors.white12
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
+        ..strokeWidth = isTarget ? 2.0 : 1.0;
 
       _drawHex(canvas, pos, hexSize, hexPaint, hexOutlinePaint);
 
       // 2. Draw the "Status Bar" Rectangle (LED indicator)
       final rectPaint = Paint()
-        ..color = isPressed ? const Color(0xFF5CE65C) : Colors.grey.withOpacity(0.2)
+        ..color = isTarget 
+            ? targetColor 
+            : isPressed ? targetColor.withOpacity(0.5) : Colors.grey.withOpacity(0.2)
         ..style = PaintingStyle.fill;
 
       final rect = Rect.fromCenter(

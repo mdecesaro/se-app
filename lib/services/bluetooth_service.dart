@@ -10,7 +10,6 @@ class AppBluetoothService {
   AppBluetoothService._internal();
 
   // Bluno / DFRobot Specific UUIDs
-  final String blunoServiceUuid = "0000dfb0-0000-1000-8000-00805f9b34fb";
   final String blunoDataCharUuid = "0000dfb1-0000-1000-8000-00805f9b34fb";
 
   final List<fbp.ScanResult> _scanResults = [];
@@ -29,20 +28,18 @@ class AppBluetoothService {
   Stream<fbp.BluetoothConnectionState> get connectionStateStream => _connectionController.stream;
 
   fbp.BluetoothCharacteristic? _writeCharacteristic;
-  List<int> _lastData = [];
   String _incomingBuffer = "";
 
   List<fbp.ScanResult> get scanResults => _scanResults;
   bool get isScanning => _isScanning;
   fbp.BluetoothDevice? get connectedDevice => _connectedDevice;
-  List<int> get lastData => _lastData;
   String get firmwareVersion => _firmwareVersion;
   String get deviceType => _deviceType;
   String get registeredUser => _registeredUser;
   String get sensorCount => _sensorCount;
 
   void init() {
-    fbp.FlutterBluePlus.adapterState.listen((state) => debugPrint("BT Adapter: $state"));
+    fbp.FlutterBluePlus.setLogLevel(fbp.LogLevel.none);
   }
 
   Future<void> startScan({Function? onUpdate}) async {
@@ -69,6 +66,9 @@ class AppBluetoothService {
 
   Future<void> connect(fbp.BluetoothDevice device, {Function? onUpdate}) async {
     try {
+      _firmwareVersion = "Checking...";
+      _sensorCount = "Unknown";
+      
       device.connectionState.listen((state) {
         _connectionController.add(state);
         if (state == fbp.BluetoothConnectionState.disconnected) {
@@ -81,45 +81,56 @@ class AppBluetoothService {
       });
 
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+      
+      try { await device.requestMtu(223); } catch (_) {}
+      
       List<fbp.BluetoothService> services = await device.discoverServices();
       
+      _writeCharacteristic = null;
+      _incomingBuffer = "";
+
       for (var service in services) {
         for (var char in service.characteristics) {
-          bool isBlunoData = char.uuid.toString().toLowerCase().contains("dfb1");
+          String uuid = char.uuid.toString().toLowerCase();
+          bool isDataChar = uuid.contains("dfb1");
           
-          // Setup Notifications
-          if (char.properties.notify || char.properties.indicate) {
-            await char.setNotifyValue(true);
-            char.lastValueStream.listen((value) => _processIncomingData(value, onUpdate));
-            debugPrint("Listening to: ${char.uuid}");
-          }
-          
-          // Setup Write - Prioritize dfb1 for Bluno
-          if (char.properties.write || char.properties.writeWithoutResponse) {
-            if (_writeCharacteristic == null || isBlunoData) {
+          if (isDataChar) {
+            if (char.properties.write || char.properties.writeWithoutResponse) {
               _writeCharacteristic = char;
-              debugPrint("Selected Write Char: ${char.uuid}");
+              debugPrint("FOUND WRITE CHAR: $uuid");
+            }
+            if (char.properties.notify || char.properties.indicate) {
+              await char.setNotifyValue(true);
+              char.lastValueStream.listen((value) => _processIncomingData(value, onUpdate));
+              debugPrint("LISTENING TO DATA CHAR: $uuid");
             }
           }
         }
       }
 
-      await Future.delayed(const Duration(milliseconds: 1000));
-      await sendMessage("HANDSHAKE\n");
-      onUpdate?.call();
+      await Future.delayed(const Duration(milliseconds: 2000));
+      await performHandshake(onUpdate);
     } catch (e) {
       debugPrint("Connect Error: $e");
     }
+  }
+
+  Future<void> performHandshake([Function? onUpdate]) async {
+    if (_writeCharacteristic == null) {
+        debugPrint("Cannot handshake: No write characteristic found.");
+        return;
+    }
+    debugPrint(">>> SENDING HANDSHAKE COMMAND");
+    _incomingBuffer = ""; // Clear buffer to start fresh
+    await sendMessage("HANDSHAKE\n");
+    await Future.delayed(const Duration(milliseconds: 200));
+    onUpdate?.call();
   }
 
   Future<void> disconnect() async {
     if (_connectedDevice != null) {
       try {
         await _connectedDevice!.disconnect();
-        _connectedDevice = null;
-        _writeCharacteristic = null;
-        _firmwareVersion = "Unknown";
-        _sensorCount = "Unknown";
       } catch (e) {
         debugPrint("Disconnect Error: $e");
       }
@@ -127,25 +138,31 @@ class AppBluetoothService {
   }
 
   void _processIncomingData(List<int> value, Function? onUpdate) {
-    _lastData = value;
+    if (value.isEmpty) return;
     _dataController.add(value);
 
     String decoded = utf8.decode(value, allowMalformed: true);
     _incomingBuffer += decoded;
 
-    if (_incomingBuffer.contains('\n') || _incomingBuffer.contains('\r')) {
-      List<String> lines = _incomingBuffer.split(RegExp(r'\r\n|\r|\n'));
-      _incomingBuffer = lines.last;
+    while (_incomingBuffer.contains('\n') || _incomingBuffer.contains('\r')) {
+      int breakIndex = _incomingBuffer.indexOf(RegExp(r'[\r\n]'));
+      String line = _incomingBuffer.substring(0, breakIndex).trim();
       
-      for (int i = 0; i < lines.length - 1; i++) {
-        String line = lines[i].trim();
-        if (line.isEmpty) continue;
-        debugPrint("ARDUINO SAYS: $line");
-
-        if (line.contains("DEVICE:")) _deviceType = line.split("DEVICE:").last.trim();
-        if (line.contains("SENSORS:")) _sensorCount = line.split("SENSORS:").last.trim();
-        if (line.contains("VERSION:")) _firmwareVersion = line.split("VERSION:").last.trim();
+      String remainder = _incomingBuffer.substring(breakIndex);
+      if (remainder.startsWith('\r\n')) {
+        _incomingBuffer = remainder.substring(2);
+      } else {
+        _incomingBuffer = remainder.substring(1);
       }
+
+      if (line.isEmpty) continue;
+      debugPrint("ARDUINO-RAW: '$line'");
+
+      if (line.contains("DEVICE:")) _deviceType = line.split("DEVICE:").last.trim();
+      if (line.contains("SENSORS:")) _sensorCount = line.split("SENSORS:").last.trim();
+      if (line.contains("VERSION:")) _firmwareVersion = line.split("VERSION:").last.trim();
+      
+      // Always call update when we get ANY string from Arduino to refresh UI
       onUpdate?.call();
     }
   }
@@ -153,8 +170,19 @@ class AppBluetoothService {
   Future<void> sendMessage(String message) async {
     if (_writeCharacteristic != null) {
       try {
-        await _writeCharacteristic!.write(utf8.encode(message), 
-          withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse);
+        List<int> bytes = utf8.encode(message);
+        
+        // Standard BLE MTU limit is often 20 bytes. 
+        // We chunk the message to ensure it arrives correctly on Arduino.
+        const int chunkSize = 20;
+        for (int i = 0; i < bytes.length; i += chunkSize) {
+          int end = (i + chunkSize < bytes.length) ? i + chunkSize : bytes.length;
+          List<int> chunk = bytes.sublist(i, end);
+          
+          await _writeCharacteristic!.write(chunk, withoutResponse: true);
+          // Small delay between chunks for Arduino to process
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
       } catch (e) {
         debugPrint("Send Error: $e");
       }
