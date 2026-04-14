@@ -264,15 +264,72 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     
     try {
       final db = await DatabaseService().database;
-      // We'll save each result point. In a real app, you might create a 'sessions' table first.
-      for (var result in _results) {
-        await db.insert('evaluation_results', {
-          ...result.toMap(),
-          'exercise_id': widget.exercise.id,
-          'timestamp': DateTime.now().toIso8601String(),
-        });
+      
+      // 1. Get current athlete (for now, the first one in DB)
+      final List<Map<String, dynamic>> athletes = await db.query('athletes', limit: 1);
+      int athleteId = athletes.isNotEmpty ? athletes.first['id'] : 1;
+
+      // 2. Parse parameters from exercise
+      Map<String, dynamic> params = json.decode(widget.exercise.parameters);
+      if (params.containsKey('parameters')) {
+        params = params['parameters'];
       }
-      _addLog("💾 Dados salvos com sucesso.");
+      
+      final int stimuliCount = params['stimuli_count'] ?? 0;
+      final String delayType = params['delay_type'] ?? 'fixed';
+      final List<dynamic> delayRange = params['delay_range_ms'] ?? [700];
+      final int delayMin = delayRange.isNotEmpty ? (delayRange.first as num).toInt() : 0;
+      final int delayMax = delayRange.length > 1 ? (delayRange.last as num).toInt() : delayMin;
+      final int executionRounds = params['execution_rounds'] ?? 1;
+      final int timeoutMs = params['timeout_ms'] ?? 0;
+      final bool repeatIfWrong = params['repeat_if_wrong'] ?? false;
+
+      // 3. Calculate Session Stats (Mirroring Python Controller)
+      int totalAttempts = _results.length;
+      int hits = _results.where((r) => r.error == 0).length;
+      int errors = _results.where((r) => r.error != 0).length;
+      
+      double avgRT = 0;
+      double durationMs = 0;
+      if (_results.isNotEmpty) {
+        avgRT = _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
+        durationMs = _results.map((e) => e.reactionTime).reduce((a, b) => a + b).toDouble();
+      }
+
+      // 4. Insert into evaluation_tests (The Session Header)
+      int testId = await db.insert('evaluation_tests', {
+        'athlete_id': athleteId,
+        'exercise_id': widget.exercise.id,
+        'device_id': 'GRID_AI_DMAT', // or get from BLE
+        'platform_version': '1.0.0',
+        'timestamp': DateTime.now().toIso8601String(),
+        'stimuli_count': stimuliCount,
+        'delay_type': delayType,
+        'delay_min_ms': delayMin,
+        'delay_max_ms': delayMax,
+        'execution_rounds': executionRounds,
+        'timeout_ms': timeoutMs,
+        'repeat_if_wrong': repeatIfWrong ? 1 : 0,
+        'total_attempts': totalAttempts,
+        'hits': hits,
+        'errors': errors,
+        'avg_reaction_time': avgRT,
+        'duration_ms': durationMs,
+      });
+
+      // 5. Insert each result into evaluation_test_results
+      for (var result in _results) {
+        Map<String, dynamic> row = result.toMap();
+        row['test_id'] = testId;
+        
+        // Handle types and complex fields
+        row['wrong_stimulus_id'] = row['wrong_stimulus_id'].toString();
+        row['distractor_id_color'] = json.encode(row['distractor_id_color']);
+        
+        await db.insert('evaluation_test_results', row);
+      }
+      
+      _addLog("💾 Dados salvos com sucesso (Test ID: $testId).");
     } catch (e) {
       _addLog("❌ Erro ao salvar dados: $e");
     }
