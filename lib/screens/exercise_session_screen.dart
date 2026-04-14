@@ -12,8 +12,15 @@ class SensorDefinition {
   final double x;
   final double y;
   final String sector;
+  final String expectedFoot;
 
-  SensorDefinition({required this.id, required this.x, required this.y, required this.sector});
+  SensorDefinition({
+    required this.id, 
+    required this.x, 
+    required this.y, 
+    required this.sector, 
+    required this.expectedFoot
+  });
 }
 
 class ExerciseSessionScreen extends StatefulWidget {
@@ -67,7 +74,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         id: m['sensor'],
         x: (m['x_c'] as num).toDouble(),
         y: (m['y_c'] as num).toDouble(),
-        sector: m['sector'],
+        sector: m['sector'] ?? "unknown",
+        expectedFoot: m['expected_foot'] ?? "unknown",
       )).toList();
     });
   }
@@ -374,7 +382,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   void _recordResult(int round, int sensorId, int reactionTimeMs, int delay) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
-      orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown"),
+      orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown", expectedFoot: "unknown"),
     );
 
     final result = EvaluationResult(
@@ -389,7 +397,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       delayMs: delay,
       elapsedSinceStart: stopwatch.elapsedMilliseconds,
       error: 0,
-      footUsed: "unknown", // To be updated by athlete profile later
+      footUsed: sensorDef.expectedFoot,
       wrongStimulusId: 0,
       distractorIdColor: [],
     );
