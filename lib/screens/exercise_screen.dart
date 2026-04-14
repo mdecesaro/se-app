@@ -227,7 +227,7 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                '${category.totalDone} / ${category.exercisesNumber}',
+                '${category.exercisesNumber} / ${category.totalDone}',
                 style: const TextStyle(
                   color: Colors.orangeAccent,
                   fontWeight: FontWeight.bold,

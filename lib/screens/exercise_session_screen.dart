@@ -58,12 +58,25 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   bool _isWaitingForSet = false;
   String _lastSentCommand = "";
   int _countdownValue = -1; // -1 means no countdown
+  String? _athleteName;
 
   @override
   void initState() {
     super.initState();
+    _loadAthlete();
     _loadSensors();
     _setupDataListener();
+  }
+
+  Future<void> _loadAthlete() async {
+    try {
+      final athletes = await DatabaseService().getAthletes();
+      if (athletes.isNotEmpty) {
+        setState(() => _athleteName = athletes.first.name);
+      }
+    } catch (e) {
+      debugPrint("Error loading athlete: $e");
+    }
   }
 
   Future<void> _loadSensors() async {
@@ -81,60 +94,91 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _setupDataListener() {
-    _dataSubscription = _bluetoothService.dataStream.listen((data) {
-      String decoded = utf8.decode(data, allowMalformed: true);
-      _incomingBuffer += decoded;
-
-      if (_incomingBuffer.contains('\n') || _incomingBuffer.contains('\r')) {
-        List<String> lines = _incomingBuffer.split(RegExp(r'\r\n|\r|\n'));
-        _incomingBuffer = lines.last;
-
-        for (int i = 0; i < lines.length - 1; i++) {
-          String line = lines[i].trim();
-          if (line.isNotEmpty) {
-            _parseSensorData(line);
-          }
-        }
+    _dataSubscription?.cancel();
+    _dataSubscription = _bluetoothService.lineStream.listen((line) {
+      if (line.startsWith("EVT|") || line == "SET_OK" || line == "START_OK" || line == "DONE") {
+        _handleHardwareEvent(line);
+      } else {
+        _parseSensorData(line);
       }
     });
   }
 
+  String _colorToHex(dynamic color) {
+    if (color == null) return "ffffff";
+    String c = color.toString().toLowerCase();
+    if (c.startsWith('#')) return c.replaceAll('#', '');
+    
+    const map = {
+      'green': '00ff00',
+      'red': 'ff0000',
+      'yellow': 'ffff00',
+      'blue': '0000ff'
+    };
+    return map[c] ?? 'ffffff';
+  }
+
   String _buildProtocolCommand() {
     try {
-      dynamic params = widget.exercise.parameters;
-      if (params is String) {
-        params = json.decode(params);
-      }
-      if (params is Map && params.containsKey('parameters')) {
-        params = params['parameters'];
-      }
+      dynamic data = widget.exercise.parameters;
+      if (data is String) data = json.decode(data);
+      final params = data['parameters'] ?? {};
 
-      // Format: SET|stimuli_count|manual|delay_range|rounds|color hex
-      
       // 1. stimuli_count
-      String count = params['stimuli_count']?.toString() ?? "10";
+      int count = params['stimuli_count'] ?? 10;
 
-      // 2. manual (0 = random)
-      String manual = (params['stimuli_generation_mode'] == "sequence") ? "1" : "0";
+      // 2. manual (0=random, 1=defined)
+      String mode = params['stimuli_generation_mode'] ?? 'random';
+      List<dynamic> sequence = params['stimuli_sequence'] ?? [];
+      int manual = (mode == 'defined' || sequence.isNotEmpty) ? 1 : 0;
 
-      // 3. delay_range
-      String delay;
-      if (params['delay_type'] == "range") {
-        delay = "${params['delay_range_ms'][0]},${params['delay_range_ms'][1]}";
-      } else {
-        delay = params['delay_range_ms'][0].toString();
+      // 3. delay (fixed or min,max)
+      String delay = "500";
+      if (params['delay_type'] == "range" && params['delay_range_ms'] is List) {
+        final List dr = params['delay_range_ms'];
+        delay = dr.length > 1 ? "${dr[0]},${dr[1]}" : "${dr[0]}";
+      } else if (params['delay_range_ms'] is List && (params['delay_range_ms'] as List).isNotEmpty) {
+        delay = "${params['delay_range_ms'][0]}";
       }
 
       // 4. rounds
-      String rounds = params['execution_rounds']?.toString() ?? "1";
+      int rounds = params['execution_rounds'] ?? 1;
 
-      // 5. color hex (remove #)
-      String color = (params['correct_color'] ?? "#${0xffffff.toRadixString(16)}").replaceAll("#", "");
+      // 5. correct_color
+      String color = _colorToHex(params['correct_color']);
 
-      return "SET|$count|$manual|$delay|$rounds|$color";
+      // 6. stimulus_type
+      String stimType = params['stimulus_type'] ?? "color";
+
+      // 7. distractor_type
+      String distType = params['distractor_type'] ?? "none";
+
+      // 8. distractor_count
+      int distCount = params['distractor_ncolors_at_time'] ?? 0;
+
+      // 9. distractor_colors (comma-separated hex)
+      List distColorsList = params['distractor_colors'] ?? [];
+      String distColors = distColorsList.map((c) => _colorToHex(c)).join(',');
+      if (distColors.isEmpty) distColors = "000000";
+
+      // 10. timeout
+      int timeout = params['timeout_ms'] ?? 0;
+
+      // 11. repeat_if_wrong
+      int repeat = (params['repeat_if_wrong'] == true) ? 1 : 0;
+
+      // SET|count|manual|delay|rounds|color|stim_type|dist_type|dist_count|dist_colors|timeout|repeat
+      String command = "SET|$count|$manual|$delay|$rounds|$color|$stimType|$distType|$distCount|$distColors|$timeout|$repeat";
+      
+      // 12. sequence (appended at the end)
+      if (manual == 1 && sequence.isNotEmpty) {
+        command += "|${sequence.join(',')}";
+      }
+
+      return command;
     } catch (e) {
       _addLog("Protocol Error: $e");
-      return "SET|10|0|500|1|${0xffffff.toRadixString(16)}";
+      return "SET|10|0|500|1|ffffff|color|none|0|000000|0|0";
     }
   }
 
@@ -213,6 +257,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     await _bluetoothService.sendMessage("START\n");
   }
 
+  void _finishSession() {
+    stopwatch.stop();
+    _timer?.cancel();
+    setState(() {
+      _isSessionStarted = false;
+      _isFinished = true;
+      _currentTarget = -1;
+    });
+    _saveResultsToDatabase();
+  }
+
   void _addLog(String message) {
     if (!mounted) return;
     setState(() {
@@ -231,10 +286,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _parseSensorData(String data) {
-    // Ignore echoes and Handshake noise (Bluetooth feedback loop)
+    // Ignore echoes and Handshake noise
     if (data == _lastSentCommand || 
         data == "HANDSHAKE" ||
-        data.startsWith("SET|") && _lastSentCommand.contains("SET|")) {
+        (data.startsWith("SET|") && _lastSentCommand.startsWith("SET|"))) {
       return;
     }
 
@@ -250,20 +305,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       } catch (e) {
         debugPrint("Error parsing sensor data: $e");
       }
-    } else if (data == "SET_OK") {
-      _onSetConfirmed();
-    } else if (data.startsWith("EVT|")) {
-      _handleHardwareEvent(data);
-    } else if (data == "DONE") {
-      _addLog("🏁 DONE - Execution finished.");
-      _saveResultsToDatabase();
-      setState(() {
-        _isFinished = true;
-        _isSessionStarted = false;
-        _currentTarget = -1;
-        stopwatch.stop();
-        _timer?.cancel();
-      });
     } else {
       _addLog("📨 [RAW]: $data");
     }
@@ -346,25 +387,40 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _handleHardwareEvent(String evtLine) {
+    if (evtLine == "DONE") {
+      _addLog("🏁 DONE - Execution finished.");
+      _finishSession();
+      return;
+    }
+    if (evtLine == "SET_OK") {
+      _onSetConfirmed();
+      return;
+    }
+    if (evtLine == "START_OK") {
+      _addLog("✔️ START confirmed.");
+      return;
+    }
+
     try {
       List<String> parts = evtLine.split('|');
-      if (parts.length < 4) return;
+      if (parts.length < 2) return;
 
       String evtType = parts[1];
-      int round = int.tryParse(parts[2]) ?? 0;
-      int sensorId = int.tryParse(parts[3]) ?? 0;
 
       // EVT|ON|round|sensorIdx
-      if (evtType == "ON") {
+      if (evtType == "ON" && parts.length >= 4) {
+        int sensorId = int.tryParse(parts[3]) ?? 0;
         setState(() => _currentTarget = sensorId);
         _addLog("Target ON: Sensor $sensorId");
       }
       // EVT|HIT|round|sensorIdx|ms|delay
-      else if (evtType == "HIT") {
+      else if (evtType == "HIT" && parts.length >= 6) {
+        int round = int.tryParse(parts[2]) ?? 0;
+        int sensorId = int.tryParse(parts[3]) ?? 0;
         int ms = int.tryParse(parts[4]) ?? 0;
         int delay = int.tryParse(parts[5]) ?? 0;
 
-        _recordResult(round, sensorId, ms, delay);
+        _recordResult(round, sensorId, ms, delay, isHit: true);
 
         setState(() {
           _hits++;
@@ -372,16 +428,31 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         });
         _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
       }
+      // EVT|MISS|round|sensorIdx|REASON|delay
+      else if (evtType == "MISS" && parts.length >= 6) {
+        int round = int.tryParse(parts[2]) ?? 0;
+        int sensorId = int.tryParse(parts[3]) ?? 0;
+        String reason = parts[4]; // TIMEOUT or ERROR
+        int delay = int.tryParse(parts[5]) ?? 0;
+
+        _recordResult(round, sensorId, 0, delay, isHit: false, reason: reason);
+
+        setState(() {
+          _misses++;
+          _currentTarget = -1;
+        });
+        _addLog("MISS! $reason at Sensor $sensorId");
+      }
       // EVT|END|total_ms|hits|misses
-      else if (evtType == "END") {
-        _addLog("Session Summary: ${parts[3]} hits, ${parts[4]} misses");
+      else if (evtType == "END" && parts.length >= 5) {
+        _addLog("🏁 Session Summary: ${parts[3]} hits, ${parts[4]} misses");
       }
     } catch (e) {
       _addLog("Parse Error: $e");
     }
   }
 
-  void _recordResult(int round, int sensorId, int reactionTimeMs, int delay) {
+  void _recordResult(int round, int sensorId, int reactionTimeMs, int delay, {required bool isHit, String reason = ""}) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
       orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown", expectedFoot: "unknown"),
@@ -394,11 +465,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       stimulusType: "color",
       correctColor: _correctColor,
       reactionTime: reactionTimeMs,
-      stimulusStart: 0, // Calculated on hardware
-      stimulusEnd: 0,   // Calculated on hardware
+      stimulusStart: 0, 
+      stimulusEnd: reactionTimeMs,
       delayMs: delay,
-      elapsedSinceStart: stopwatch.elapsedMilliseconds,
-      error: 0,
+      elapsedSinceStart: 0, 
+      error: isHit ? 0 : (reason == "TIMEOUT" ? 2 : 1),
       footUsed: sensorDef.expectedFoot,
       wrongStimulusId: 0,
       distractorIdColor: [],
@@ -432,7 +503,14 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: AppBar(
-            title: Text(widget.exercise.name, style: const TextStyle(fontSize: 18)),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.exercise.name, style: const TextStyle(fontSize: 18)),
+                if (_athleteName != null)
+                  Text("Athlete: $_athleteName", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            ),
             backgroundColor: const Color(0xFF1A1A1A),
             elevation: 0,
             automaticallyImplyLeading: false,
@@ -656,10 +734,22 @@ class MatPainter extends CustomPainter {
     final double rectHeight = 1.2 * scale; 
     final double rectOffsetDeltaY = -4.5 * scale; 
 
-    // Parse correct color
+    // Parse correct color (Support Hex or Named)
     Color targetColor;
     try {
-      targetColor = Color(int.parse(correctColor.replaceAll('#', '0xFF')));
+      String hex = correctColor.replaceAll('#', '');
+      if (hex.length == 6) {
+        targetColor = Color(int.parse("0xFF$hex"));
+      } else {
+        // Fallback for named colors if not pre-converted
+        const map = {
+          'green': Colors.green,
+          'red': Colors.red,
+          'yellow': Colors.yellow,
+          'blue': Colors.blue
+        };
+        targetColor = map[correctColor.toLowerCase()] ?? Colors.orange;
+      }
     } catch (_) {
       targetColor = Colors.orange;
     }
@@ -673,14 +763,14 @@ class MatPainter extends CustomPainter {
 
       // 1. Draw the Hexagon (The Pad)
       final hexPaint = Paint()
-        ..color = isPressed 
-            ? targetColor.withOpacity((val / 1023.0).clamp(0.4, 0.9)) 
+        ..color = isPressed
+            ? targetColor.withOpacity((val / 1023.0).clamp(0.4, 0.9))
             : Colors.white.withOpacity(0.02)
         ..style = PaintingStyle.fill;
 
       final hexOutlinePaint = Paint()
         ..color = isTarget 
-            ? Colors.orangeAccent 
+            ? Colors.orangeAccent
             : Colors.orange.withOpacity(0.1) // Even subtler inactive border
         ..style = PaintingStyle.stroke
         ..strokeWidth = isTarget ? 2.0 : 0.8;

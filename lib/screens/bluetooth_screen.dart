@@ -71,7 +71,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
         ),
       ),
       child: InkWell(
-        onTap: _btService.isScanning ? null : () => _btService.startScan(onUpdate: () => setState(() {})),
+        onTap: _btService.isScanning ? null : () => _btService.startScan(onUpdate: _handleUpdate),
         borderRadius: BorderRadius.circular(20),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

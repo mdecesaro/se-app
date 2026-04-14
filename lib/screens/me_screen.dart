@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/athlete.dart';
-import '../services/database_service.dart';
 
 class MeScreen extends StatelessWidget {
   final Athlete? athlete;

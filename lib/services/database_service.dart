@@ -1,6 +1,5 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import '../models/athlete.dart';
 import 'package:flutter/foundation.dart';
@@ -20,12 +19,16 @@ class DatabaseService {
 
   Future<Database> _initDatabase() async {
     String path = join(await getDatabasesPath(), 'flyfeet_v10.db');
-    return await openDatabase(
+    final db = await openDatabase(
       path,
       version: 8, // Bumped to 8 for full evaluation_tests fields
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+    // Temporary: Clear data for verification of Category Stats
+    // await db.delete('evaluation_tests');
+    // await db.delete('evaluation_test_results');
+    return db;
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -318,4 +321,6 @@ class DatabaseService {
     final db = await database;
     return (await db.query('athletes')).map((m) => Athlete.fromMap(m)).toList();
   }
+
+
 }
