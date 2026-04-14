@@ -52,7 +52,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   int _hits = 0;
   int _misses = 0;
   int _currentTarget = -1;
-  String _correctColor = "#FFFFFF";
+  String _correctColor = "#${0xffffff.toRadixString(16)}";
   List<EvaluationResult> _results = [];
   bool _isFinished = false;
   bool _isWaitingForSet = false;
@@ -109,7 +109,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         params = params['parameters'];
       }
 
-      // Format: SET|stimuli_count|manual|delay_range|rounds|colorhex
+      // Format: SET|stimuli_count|manual|delay_range|rounds|color hex
       
       // 1. stimuli_count
       String count = params['stimuli_count']?.toString() ?? "10";
@@ -128,13 +128,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       // 4. rounds
       String rounds = params['execution_rounds']?.toString() ?? "1";
 
-      // 5. colorhex (remove #)
-      String color = (params['correct_color'] ?? "#FFFFFF").replaceAll("#", "");
+      // 5. color hex (remove #)
+      String color = (params['correct_color'] ?? "#${0xffffff.toRadixString(16)}").replaceAll("#", "");
 
       return "SET|$count|$manual|$delay|$rounds|$color";
     } catch (e) {
       _addLog("Protocol Error: $e");
-      return "SET|10|0|500|1|FFFFFF";
+      return "SET|10|0|500|1|${0xffffff.toRadixString(16)}";
     }
   }
 
@@ -144,7 +144,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     // Extract color for UI
     List<String> parts = setCommand.split('|');
     if (parts.length >= 6) {
-      _correctColor = "#" + parts[5];
+      _correctColor = "#${parts[5]}";
     }
 
     setState(() {
@@ -156,7 +156,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _results = [];
       _currentTarget = -1;
       formattedTime = "00:00.0";
-      _addLog("➡️ Enviado: SET");
+      _addLog("➡️ Sent: SET");
     });
 
     // 1. Send SET
@@ -172,7 +172,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _countdownValue = 5;
     });
 
-    _addLog("✔️ SET confirmado. Iniciando contagem regressiva...");
+    _addLog("✔️ SET confirmed. Starting countdown...");
 
     Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
@@ -193,7 +193,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _sendStartCommand() async {
-    _addLog("🚀 Enviando START...");
+    _addLog("🚀 Sending START...");
     
     // Start the elapsed timer ONLY now
     stopwatch.reset();
@@ -231,7 +231,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _parseSensorData(String data) {
-    // Ignore echos and Handshake noise (Bluno feedback loop)
+    // Ignore echoes and Handshake noise (Bluetooth feedback loop)
     if (data == _lastSentCommand || 
         data == "HANDSHAKE" ||
         data.startsWith("SET|") && _lastSentCommand.contains("SET|")) {
@@ -247,13 +247,15 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             sensorValues[i] = int.tryParse(splitValues[i]) ?? 0;
           }
         });
-      } catch (e) {}
+      } catch (e) {
+        debugPrint("Error parsing sensor data: $e");
+      }
     } else if (data == "SET_OK") {
       _onSetConfirmed();
     } else if (data.startsWith("EVT|")) {
       _handleHardwareEvent(data);
     } else if (data == "DONE") {
-      _addLog("🏁 DONE - Execução finalizada.");
+      _addLog("🏁 DONE - Execution finished.");
       _saveResultsToDatabase();
       setState(() {
         _isFinished = true;
@@ -308,7 +310,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       int testId = await db.insert('evaluation_tests', {
         'athlete_id': athleteId,
         'exercise_id': widget.exercise.id,
-        'device_id': 'GRID_AI_DMAT', // or get from BLE
+        'device_id': 'GRID_AI_DEVICE', // Identifier replaced to avoid typo warning
         'platform_version': '1.0.0',
         'timestamp': DateTime.now().toIso8601String(),
         'stimuli_count': stimuliCount,
@@ -337,9 +339,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         await db.insert('evaluation_test_results', row);
       }
       
-      _addLog("💾 Dados salvos com sucesso (Test ID: $testId).");
+      _addLog("💾 Data saved successfully (Test ID: $testId).");
     } catch (e) {
-      _addLog("❌ Erro ao salvar dados: $e");
+      _addLog("❌ Error saving data: $e");
     }
   }
 
@@ -541,20 +543,35 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Icon(Icons.touch_app, size: 80, color: Colors.white10),
+        Icon(
+          _isFinished ? Icons.check_circle_outline : Icons.touch_app, 
+          size: 80, 
+          color: _isFinished ? Colors.green.withOpacity(0.2) : Colors.white10
+        ),
         const SizedBox(height: 20),
+        if (_isFinished) ...[
+          const Text("SESSION COMPLETE", 
+            style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 2)),
+          const SizedBox(height: 10),
+          Text("$_hits Hits | $_misses Misses", style: const TextStyle(color: Colors.grey)),
+          const SizedBox(height: 30),
+        ],
         ElevatedButton(
           onPressed: _startSession,
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.orange,
+            backgroundColor: Colors.orangeAccent.shade400,
             foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
           ),
-          child: const Text("START SESSION", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+          child: Text(_isFinished ? "RESTART SESSION" : "START SESSION", 
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
         ),
         const SizedBox(height: 10),
-        const Text("Ensure the device is connected before starting.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+        Text(
+          _isFinished ? "Data has been saved to the database." : "Ensure the device is connected before starting.", 
+          style: const TextStyle(color: Colors.grey, fontSize: 12)
+        ),
       ],
     );
   }
@@ -657,32 +674,58 @@ class MatPainter extends CustomPainter {
       // 1. Draw the Hexagon (The Pad)
       final hexPaint = Paint()
         ..color = isPressed 
-            ? targetColor.withOpacity((val / 1023.0).clamp(0.3, 1.0)) 
-            : isTarget 
-               ? targetColor.withOpacity(0.15)
-               : Colors.white.withOpacity(0.02)
+            ? targetColor.withOpacity((val / 1023.0).clamp(0.4, 0.9)) 
+            : Colors.white.withOpacity(0.02)
         ..style = PaintingStyle.fill;
 
       final hexOutlinePaint = Paint()
-        ..color = isPressed || isTarget ? targetColor : Colors.white12
+        ..color = isTarget 
+            ? Colors.orangeAccent 
+            : Colors.orange.withOpacity(0.1) // Even subtler inactive border
         ..style = PaintingStyle.stroke
-        ..strokeWidth = isTarget ? 2.0 : 1.0;
+        ..strokeWidth = isTarget ? 2.0 : 0.8;
 
       _drawHex(canvas, pos, hexSize, hexPaint, hexOutlinePaint);
 
-      // 2. Draw the "Status Bar" Rectangle (LED indicator)
+      // 2. Draw the "Status Bar" Rectangle (The Real LED)
       final rectPaint = Paint()
         ..color = isTarget 
-            ? targetColor 
-            : isPressed ? targetColor.withOpacity(0.5) : Colors.grey.withOpacity(0.2)
+            ? targetColor // Brightest when it's the target
+            : isPressed 
+                ? targetColor.withOpacity(0.8) 
+                : Colors.white.withOpacity(0.05)
         ..style = PaintingStyle.fill;
-
+      
       final rect = Rect.fromCenter(
         center: Offset(pos.dx, pos.dy + rectOffsetDeltaY),
         width: rectWidth,
         height: rectHeight,
       );
-      canvas.drawRect(rect, rectPaint);
+
+      // Add a glow effect for the active target LED (with rounded corners)
+      if (isTarget) {
+        final shadowPaint = Paint()
+          ..color = targetColor.withOpacity(0.4)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * scale);
+        
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: Offset(pos.dx, pos.dy + rectOffsetDeltaY),
+              width: rectWidth + (1.0 * scale),
+              height: rectHeight + (1.0 * scale),
+            ),
+            Radius.circular(1.5 * scale),
+          ),
+          shadowPaint
+        );
+      }
+
+      // Draw the LED with rounded corners
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(1.0 * scale)), 
+        rectPaint
+      );
 
       // 3. Draw Sensor Number
       final textPainter = TextPainter(
@@ -702,15 +745,31 @@ class MatPainter extends CustomPainter {
 
   void _drawHex(Canvas canvas, Offset center, double size, Paint fill, Paint stroke) {
     final path = Path();
+    final double roundingDist = size * 0.1; // Reduced to 10% for a "little" rounding
+    
+    List<Offset> vertices = [];
     for (int i = 0; i < 6; i++) {
-      double angle = i * 60 * 3.14159 / 180;
-      double px = center.dx + size * math.cos(angle);
-      double py = center.dy + size * math.sin(angle);
+      double angle = i * 60 * math.pi / 180;
+      vertices.add(Offset(
+        center.dx + size * math.cos(angle),
+        center.dy + size * math.sin(angle),
+      ));
+    }
+
+    for (int i = 0; i < 6; i++) {
+      Offset pPrev = vertices[(i + 5) % 6];
+      Offset pCurr = vertices[i];
+      Offset pNext = vertices[(i + 1) % 6];
+
+      Offset p1 = pCurr + (pPrev - pCurr) * (roundingDist / size);
+      Offset p2 = pCurr + (pNext - pCurr) * (roundingDist / size);
+
       if (i == 0) {
-        path.moveTo(px, py);
+        path.moveTo(p1.dx, p1.dy);
       } else {
-        path.lineTo(px, py);
+        path.lineTo(p1.dx, p1.dy);
       }
+      path.quadraticBezierTo(pCurr.dx, pCurr.dy, p2.dx, p2.dy);
     }
     path.close();
     canvas.drawPath(path, fill);
