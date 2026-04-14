@@ -25,7 +25,15 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
 
   Future<void> _loadCategories() async {
     final db = await DatabaseService().database;
-    final List<Map<String, dynamic>> maps = await db.query('categories');
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT 
+          c.*, 
+          COUNT(ex.id) AS exercises_number,
+          SUM(CASE WHEN (SELECT COUNT(*) FROM evaluation_tests et WHERE et.exercise_id = ex.id) > 0 THEN 1 ELSE 0 END) AS total_done
+      FROM categories c
+      LEFT JOIN exercises ex ON c.id = ex.category_id
+      GROUP BY c.id
+    ''');
     setState(() {
       _categories = maps.map((m) => Category.fromMap(m)).toList();
       _isLoading = false;
@@ -211,7 +219,24 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
                 fontSize: 18,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black26,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '${category.totalDone} / ${category.exercisesNumber}',
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
               child: Text(
