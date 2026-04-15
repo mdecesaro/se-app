@@ -1,7 +1,6 @@
 class Exercise {
   final int? id;
   final int categoryId;
-  final String code;
   final String name;
   final String description;
   final int level;
@@ -14,7 +13,6 @@ class Exercise {
   Exercise({
     this.id,
     required this.categoryId,
-    required this.code,
     required this.name,
     required this.description,
     this.level = 1,
@@ -29,7 +27,6 @@ class Exercise {
     return Exercise(
       id: map['id'],
       categoryId: map['category_id'],
-      code: map['code'],
       name: map['name'],
       description: map['description'],
       level: map['level'],
@@ -43,9 +40,8 @@ class Exercise {
 
   Map<String, dynamic> toMap() {
     return {
-      'id': id,
+      if (id != null) 'id': id,
       'category_id': categoryId,
-      'code': code,
       'name': name,
       'description': description,
       'level': level,

@@ -2,8 +2,10 @@
   "type": "object",
   "properties": {
     "category": {
-      "type": "string",
-      "enum": ["Cognitive", "Coordination", "Conditioning", "Performance"]
+      "type": "string", "enum": ["Cognitive", "Coordination", "Conditioning", "Performance"]
+    },
+    "modality": {
+      "type": "string", "enum": ["Single-Touch", "Multi-Touch"]
     },
     "parameters": {
       "type": "object",
@@ -39,8 +41,7 @@
               "type": "array",
               "items": {
                 "anyOf": [
-                  { "type": "string", "pattern": "^#([A-Fa-f0-9]{6})$" },
-                  { "type": "string", "enum": ["green", "red", "yellow", "blue"] }
+                  { "type": "string", "pattern": "^#([A-Fa-f0-9]{6})$" }
                 ]
               }
             }
@@ -79,6 +80,6 @@
       "additionalProperties": false
     }
   },
-  "required": ["category", "parameters"],
+  "required": ["category", "modality", "parameters"],
   "additionalProperties": false
 }
