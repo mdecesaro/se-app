@@ -47,6 +47,7 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
       'exercises',
       where: 'category_id = ? AND active = 1',
       whereArgs: [categoryId],
+      orderBy: 'level ASC, name ASC',
     );
     setState(() {
       _exercises = maps.map((m) => Exercise.fromMap(m)).toList();
@@ -147,6 +148,41 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
           child: ListTile(
             contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            leading: Container(
+              width: 45,
+              height: 45,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.5),
+                  width: 2,
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '${exercise.level}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                      height: 1.0,
+                    ),
+                  ),
+                  Text(
+                    'LEVEL',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontSize: 7,
+                      fontWeight: FontWeight.bold,
+                      height: 0.8,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             title: Text(
               exercise.name,
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
