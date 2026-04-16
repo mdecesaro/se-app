@@ -52,6 +52,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   int _hits = 0;
   int _misses = 0;
   int _currentTarget = -1;
+  Map<int, String> _activeDistractors = {};
   String _correctColor = "#${0xffffff.toRadixString(16)}";
   List<EvaluationResult> _results = [];
   bool _isFinished = false;
@@ -199,6 +200,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _misses = 0;
       _results = [];
       _currentTarget = -1;
+      _activeDistractors = {};
       formattedTime = "00:00.0";
       _addLog("➡️ Sent: SET");
     });
@@ -264,6 +266,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isSessionStarted = false;
       _isFinished = true;
       _currentTarget = -1;
+      _activeDistractors = {};
     });
     _saveResultsToDatabase();
   }
@@ -407,10 +410,32 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
       String evtType = parts[1];
 
-      // EVT|ON|round|sensorIdx
+      // EVT|ON|round|sensorIdx|correct_color|dist_ids|dist_colors
       if (evtType == "ON" && parts.length >= 4) {
         int sensorId = int.tryParse(parts[3]) ?? 0;
-        setState(() => _currentTarget = sensorId);
+        String? newCorrectColor;
+        Map<int, String> newDistractors = {};
+
+        if (parts.length >= 7) {
+          newCorrectColor = parts[4];
+          List<String> distIds = parts[5].split(',');
+          List<String> distColors = parts[6].split(',');
+          for (int i = 0; i < distIds.length; i++) {
+            int? id = int.tryParse(distIds[i]);
+            if (id != null && i < distColors.length) {
+              String color = distColors[i];
+              newDistractors[id] = color.startsWith('#') ? color : "#$color";
+            }
+          }
+        }
+
+        setState(() {
+          _currentTarget = sensorId;
+          _activeDistractors = newDistractors;
+          if (newCorrectColor != null && newCorrectColor.isNotEmpty) {
+            _correctColor = newCorrectColor.startsWith('#') ? newCorrectColor : "#$newCorrectColor";
+          }
+        });
         _addLog("Target ON: Sensor $sensorId");
       }
       // EVT|HIT|round|sensorIdx|ms|delay
@@ -425,6 +450,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() {
           _hits++;
           _currentTarget = -1;
+          _activeDistractors = {};
         });
         _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
       }
@@ -440,6 +466,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() {
           _misses++;
           _currentTarget = -1;
+          _activeDistractors = {};
         });
         _addLog("MISS! $reason at Sensor $sensorId");
       }
@@ -666,6 +693,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
               values: sensorValues,
               currentTarget: _currentTarget,
               correctColor: _correctColor,
+              distractors: _activeDistractors,
             ),
           );
         },
@@ -716,12 +744,14 @@ class MatPainter extends CustomPainter {
   final List<int> values;
   final int currentTarget;
   final String correctColor;
+  final Map<int, String> distractors;
 
   MatPainter({
     required this.sensors, 
     required this.values, 
     required this.currentTarget,
     required this.correctColor,
+    required this.distractors,
   });
 
   @override
@@ -734,25 +764,20 @@ class MatPainter extends CustomPainter {
     final double rectHeight = 1.2 * scale; 
     final double rectOffsetDeltaY = -4.5 * scale; 
 
-    // Parse correct color (Support Hex or Named)
-    Color targetColor;
-    try {
-      String hex = correctColor.replaceAll('#', '');
-      if (hex.length == 6) {
-        targetColor = Color(int.parse("0xFF$hex"));
-      } else {
-        // Fallback for named colors if not pre-converted
-        const map = {
-          'green': Colors.green,
-          'red': Colors.red,
-          'yellow': Colors.yellow,
-          'blue': Colors.blue
-        };
-        targetColor = map[correctColor.toLowerCase()] ?? Colors.orange;
+    // Helper to parse hex color
+    Color parseColor(String colorStr, Color fallback) {
+      try {
+        String hex = colorStr.replaceAll('#', '');
+        if (hex.length == 6) {
+          return Color(int.parse("0xFF$hex"));
+        }
+        return fallback;
+      } catch (_) {
+        return fallback;
       }
-    } catch (_) {
-      targetColor = Colors.orange;
     }
+
+    final Color targetColor = parseColor(correctColor, Colors.orange);
 
     for (var sensor in sensors) {
       final pos = Offset(center.dx + (sensor.x * scale), center.dy + (sensor.y * scale));
@@ -760,29 +785,37 @@ class MatPainter extends CustomPainter {
       int val = sensor.id <= values.length ? values[sensor.id - 1] : 0;
       bool isPressed = val > 100;
       bool isTarget = sensor.id == currentTarget;
+      bool isDistractor = distractors.containsKey(sensor.id);
+      
+      Color activeColor = targetColor;
+      if (isDistractor) {
+        activeColor = parseColor(distractors[sensor.id]!, Colors.red);
+      }
 
       // 1. Draw the Hexagon (The Pad)
       final hexPaint = Paint()
         ..color = isPressed
-            ? targetColor.withOpacity((val / 1023.0).clamp(0.4, 0.9))
+            ? activeColor.withOpacity((val / 1023.0).clamp(0.4, 0.9))
             : Colors.white.withOpacity(0.02)
         ..style = PaintingStyle.fill;
 
       final hexOutlinePaint = Paint()
         ..color = isTarget 
             ? Colors.orangeAccent
-            : Colors.orange.withOpacity(0.1) // Even subtler inactive border
+            : isDistractor
+                ? activeColor.withOpacity(0.5)
+                : Colors.orange.withOpacity(0.1)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = isTarget ? 2.0 : 0.8;
+        ..strokeWidth = (isTarget || isDistractor) ? 2.0 : 0.8;
 
       _drawHex(canvas, pos, hexSize, hexPaint, hexOutlinePaint);
 
       // 2. Draw the "Status Bar" Rectangle (The Real LED)
       final rectPaint = Paint()
-        ..color = isTarget 
-            ? targetColor // Brightest when it's the target
+        ..color = (isTarget || isDistractor)
+            ? activeColor // Brightest when it's the target or distractor
             : isPressed 
-                ? targetColor.withOpacity(0.8) 
+                ? activeColor.withOpacity(0.8) 
                 : Colors.white.withOpacity(0.05)
         ..style = PaintingStyle.fill;
       
@@ -792,10 +825,10 @@ class MatPainter extends CustomPainter {
         height: rectHeight,
       );
 
-      // Add a glow effect for the active target LED (with rounded corners)
-      if (isTarget) {
+      // Add a glow effect for the active target/distractor LED
+      if (isTarget || isDistractor) {
         final shadowPaint = Paint()
-          ..color = targetColor.withOpacity(0.4)
+          ..color = activeColor.withOpacity(0.4)
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * scale);
         
         canvas.drawRRect(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import '../services/database_service.dart';
 import '../models/category.dart';
 import '../models/exercise.dart';
@@ -137,67 +138,112 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
       );
     }
 
-    return ListView.builder(
+    return GridView.builder(
       padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: 0.8, // Adjusted for smaller cards
+      ),
       itemCount: _exercises.length,
       itemBuilder: (context, index) {
         final exercise = _exercises[index];
-        return Card(
-          color: const Color(0xFF2C2C2C),
-          margin: const EdgeInsets.only(bottom: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            leading: Container(
-              width: 45,
-              height: 45,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.5),
-                  width: 2,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+        return _buildExerciseCard(exercise);
+      },
+    );
+  }
+
+  Widget _buildExerciseCard(Exercise exercise) {
+    // Parse parameters to show extra info
+    Map<String, dynamic> params = {};
+    try {
+      final decoded = json.decode(exercise.parameters);
+      params = decoded['parameters'] ?? {};
+    } catch (_) {}
+
+    final int timeout = params['timeout_ms'] ?? 0;
+    final int distCount = params['distractor_ncolors_at_time'] ?? 0;
+    final int stimuli = params['stimuli_count'] ?? 0;
+
+    return Card(
+      color: const Color(0xFF2C2C2C),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: InkWell(
+        onTap: () => _showExerciseSetup(context, exercise),
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Level Badge and Name
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    '${exercise.level}',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                      height: 1.0,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
+                    ),
+                    child: Text(
+                      'Level ${exercise.level}',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10,
+                      ),
                     ),
                   ),
-                  Text(
-                    'LEVEL',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontSize: 7,
-                      fontWeight: FontWeight.bold,
-                      height: 0.8,
-                    ),
-                  ),
+                  const Icon(Icons.speed, color: Colors.white24, size: 16),
                 ],
               ),
-            ),
-            title: Text(
-              exercise.name,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              exercise.description,
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-            onTap: () {
-              _showExerciseSetup(context, exercise);
-            },
+              const SizedBox(height: 12),
+              Text(
+                exercise.name,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Text(
+                    exercise.description,
+                    style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  ),
+                ),
+              ),
+              const Divider(color: Colors.white10, height: 20),
+              // Info Grid
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildMiniStat(Icons.timer, timeout > 0 ? '${timeout}ms' : '∞'),
+                  _buildMiniStat(Icons.visibility, '$distCount Dist'),
+                  _buildMiniStat(Icons.ads_click, '$stimuli'),
+                ],
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniStat(IconData icon, String label) {
+    return Column(
+      children: [
+        Icon(icon, size: 14, color: Colors.orangeAccent.withOpacity(0.7)),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold),
+        ),
+      ],
     );
   }
 
