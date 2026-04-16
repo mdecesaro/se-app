@@ -131,8 +131,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                   ),
                   IconButton(
                     onPressed: () async {
-                      await _btService.disconnect();
-                      if (mounted) setState(() {});
+                      await _btService.disconnect(onUpdate: _handleUpdate);
                     },
                     icon: const Icon(Icons.link_off, color: Colors.redAccent),
                   )

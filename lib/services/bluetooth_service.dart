@@ -155,14 +155,27 @@ class AppBluetoothService {
     onUpdate?.call();
   }
 
-  Future<void> disconnect() async {
+  Future<void> disconnect({Function? onUpdate}) async {
     if (_connectedDevice != null) {
+      final device = _connectedDevice;
       try {
         await _dataSubscription?.cancel();
         _dataSubscription = null;
         await _connectionSubscription?.cancel();
         _connectionSubscription = null;
-        await _connectedDevice!.disconnect();
+        
+        // Clear state BEFORE awaiting hardware disconnect for UI responsiveness
+        _connectedDevice = null;
+        _writeCharacteristic = null;
+        _incomingBuffer = "";
+        _firmwareVersion = "Checking...";
+        _sensorCount = "Unknown";
+        
+        // Notify UI immediately that we are "disconnected" in our state
+        onUpdate?.call();
+        
+        // Now perform the actual hardware disconnection
+        await device!.disconnect();
       } catch (e) {
         debugPrint("Disconnect Error: $e");
       }
