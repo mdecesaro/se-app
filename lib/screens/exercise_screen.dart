@@ -222,9 +222,9 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildMiniStat(Icons.timer, timeout > 0 ? '${timeout}ms' : '∞'),
-                  _buildMiniStat(Icons.visibility, '$distCount Dist'),
-                  _buildMiniStat(Icons.ads_click, '$stimuli'),
+                  _buildMiniStat(Icons.timer, timeout > 0 ? '${timeout}ms' : '∞', 'Timeout'),
+                  _buildMiniStat(Icons.visibility, '$distCount', 'Fake'),
+                  _buildMiniStat(Icons.ads_click, '$stimuli', 'Shots'),
                 ],
               ),
             ],
@@ -234,16 +234,41 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
     );
   }
 
-  Widget _buildMiniStat(IconData icon, String label) {
-    return Column(
-      children: [
-        Icon(icon, size: 14, color: Colors.orangeAccent.withOpacity(0.7)),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold),
-        ),
-      ],
+  Widget _buildMiniStat(IconData icon, String value, String label) {
+    return Expanded(
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(icon, size: 12, color: Colors.orangeAccent.withOpacity(0.7)),
+              const SizedBox(width: 4),
+              Padding(
+                padding: const EdgeInsets.only(top: 1.5), // Pushes text slightly down to align with icon center
+                child: Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 7,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

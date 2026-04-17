@@ -150,21 +150,111 @@ class ExampleSidebarX extends StatelessWidget {
           return const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()));
         }
 
+        if (!extended) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16.0),
+            child: CircleAvatar(
+              radius: 25,
+              backgroundColor: colorScheme.primary,
+              backgroundImage: athlete!.profile.isNotEmpty ? MemoryImage(athlete!.profile) : null,
+              child: athlete!.profile.isEmpty ? const Icon(Icons.person, size: 40) : null,
+            ),
+          );
+        }
+
         return Container(
-          padding: const EdgeInsets.all(16),
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.amber.shade700,
+                const Color(0xFF2C2C2C),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.amber.shade300.withOpacity(0.5)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              )
+            ],
+          ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              CircleAvatar(
-                radius: extended ? 45 : 25,
-                backgroundColor: colorScheme.primary,
-                backgroundImage: athlete!.profile.isNotEmpty ? MemoryImage(athlete!.profile) : null,
-                child: athlete!.profile.isEmpty ? const Icon(Icons.person, size: 40) : null,
+              // Avatar
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  image: athlete!.profile.isNotEmpty
+                      ? DecorationImage(
+                          image: MemoryImage(athlete!.profile),
+                          fit: BoxFit.cover,
+                        )
+                      : null,
+                ),
+                child: athlete!.profile.isEmpty
+                    ? const Icon(Icons.person, color: Colors.white, size: 35)
+                    : null,
               ),
-              if (extended) ...[
-                const SizedBox(height: 12),
-                Text(athlete!.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                Text(athlete!.position, style: TextStyle(color: colorScheme.primary, fontSize: 12)),
-              ]
+              const SizedBox(height: 8),
+              // Full Name
+              Text(
+                athlete!.name.toUpperCase(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                  letterSpacing: 1.1,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              // Position
+              Text(
+                athlete!.position.toUpperCase(),
+                style: TextStyle(
+                  color: Colors.amber.shade300,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 9,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Divider(color: Colors.white10, height: 16),
+              // Score
+              const Text(
+                "70",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 40,
+                  height: 1.0,
+                ),
+              ),
+              Text(
+                "OVERALL SCORE",
+                style: TextStyle(
+                  color: Colors.amber.shade100,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 8,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const Divider(color: Colors.white10, height: 20),
+              // Abilities
+              _buildSidebarStatRow("Reaction", 78, "Agility", 72),
+              const SizedBox(height: 8),
+              _buildSidebarStatRow("Balance", 61, "Decision", 69),
             ],
           ),
         );
@@ -174,6 +264,43 @@ class ExampleSidebarX extends StatelessWidget {
         SidebarXItem(icon: Icons.fitness_center, label: 'Exercise'),
         SidebarXItem(icon: Icons.bluetooth, label: 'Device'),
         SidebarXItem(icon: Icons.person_outline, label: 'Me'),
+      ],
+    );
+  }
+
+  Widget _buildSidebarStatRow(String l1, int v1, String l2, int v2) {
+    return Row(
+      children: [
+        Expanded(child: _buildSidebarStat(l1, v1)),
+        const SizedBox(width: 8),
+        Expanded(child: _buildSidebarStat(l2, v2)),
+      ],
+    );
+  }
+
+  Widget _buildSidebarStat(String label, int value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 7,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          "$value",
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ],
     );
   }

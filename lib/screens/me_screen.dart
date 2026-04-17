@@ -32,37 +32,7 @@ class MeScreen extends StatelessWidget {
             
             // Header with Profile Image and Name
             Center(
-              child: Column(
-                children: [
-                  CircleAvatar(
-                    radius: 60,
-                    backgroundColor: colorScheme.primary,
-                    backgroundImage: athlete!.profile.isNotEmpty 
-                        ? MemoryImage(athlete!.profile) 
-                        : null,
-                    child: athlete!.profile.isEmpty 
-                        ? const Icon(Icons.person, size: 60, color: Colors.white) 
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    athlete!.name,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  Text(
-                    athlete!.position,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: colorScheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
+              child: FifaCard(athlete: athlete!),
             ),
             
             const SizedBox(height: 32),
@@ -158,6 +128,198 @@ class MeScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class FifaCard extends StatelessWidget {
+  final Athlete athlete;
+  final bool isCompact;
+
+  const FifaCard({
+    super.key, 
+    required this.athlete, 
+    this.isCompact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // For sidebar, we want it even narrower to fit the 210px width
+    final double cardWidth = isCompact ? 170 : 300;
+    final double ratingSize = isCompact ? 32 : 54;
+    final double nameSize = isCompact ? 12 : 22;
+    final double statValueSize = isCompact ? 16 : 24;
+    final double statLabelSize = isCompact ? 7 : 10;
+    final double imageHeight = isCompact ? 80 : 180;
+
+    return Container(
+      width: cardWidth,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.amber.shade600,
+            Colors.amber.shade800,
+            Colors.black,
+          ],
+          stops: const [0.0, 0.3, 1.0],
+        ),
+        borderRadius: BorderRadius.circular(isCompact ? 15 : 20),
+        border: Border.all(color: Colors.amber.shade300, width: isCompact ? 1.5 : 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.amber.withOpacity(0.2),
+            blurRadius: isCompact ? 10 : 20,
+            spreadRadius: isCompact ? 2 : 5,
+          )
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(isCompact ? 15 : 20),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -10,
+              left: -10,
+              child: Opacity(
+                opacity: 0.1,
+                child: Icon(Icons.shield, size: isCompact ? 200 : 300, color: Colors.white),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(isCompact ? 12.0 : 20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Column(
+                        children: [
+                          Text(
+                            "70",
+                            style: TextStyle(
+                              fontSize: ratingSize,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              height: 1.1,
+                            ),
+                          ),
+                          Text(
+                            athlete.position.toUpperCase().substring(0, 3),
+                            style: TextStyle(
+                              fontSize: isCompact ? 12 : 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white70,
+                            ),
+                          ),
+                          SizedBox(height: isCompact ? 4 : 12),
+                          Icon(Icons.public, color: Colors.white, size: isCompact ? 16 : 24),
+                        ],
+                      ),
+                      const Spacer(),
+                      Expanded(
+                        child: Container(
+                          height: imageHeight,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            image: athlete.profile.isNotEmpty
+                                ? DecorationImage(
+                                    image: MemoryImage(athlete.profile),
+                                    fit: BoxFit.cover,
+                                  )
+                                : null,
+                          ),
+                          child: athlete.profile.isEmpty
+                              ? Icon(Icons.person, size: isCompact ? 60 : 100, color: Colors.white24)
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: isCompact ? 8 : 15),
+                  Text(
+                    athlete.name.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: nameSize,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 1.1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Container(
+                    margin: EdgeInsets.symmetric(vertical: isCompact ? 6 : 10),
+                    height: 1.5,
+                    width: isCompact ? 120 : 200,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.transparent, Colors.amber.shade300, Colors.transparent],
+                      ),
+                    ),
+                  ),
+                  Text(
+                    "MOTOR SKILL SCORE",
+                    style: TextStyle(
+                      color: Colors.amber,
+                      fontSize: isCompact ? 7 : 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: isCompact ? 1 : 2,
+                    ),
+                  ),
+                  SizedBox(height: isCompact ? 8 : 15),
+                  // Stats Grid
+                  _buildStatsRow("Reaction", 78, "Agility", 72, isCompact),
+                  SizedBox(height: isCompact ? 8 : 12),
+                  _buildStatsRow("Balance", 61, "Decision", 69, isCompact),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatsRow(String l1, int v1, String l2, int v2, bool compact) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _buildFifaStat(l1, v1, compact),
+        _buildFifaStat(l2, v2, compact),
+      ],
+    );
+  }
+
+  Widget _buildFifaStat(String label, int value, bool compact) {
+    return SizedBox(
+      width: compact ? 70 : 100,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: compact ? 7 : 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.1,
+            ),
+            maxLines: 1,
+          ),
+          SizedBox(height: compact ? 2 : 4),
+          Text(
+            "$value",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: compact ? 16 : 24,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
