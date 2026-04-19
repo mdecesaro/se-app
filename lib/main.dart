@@ -186,26 +186,49 @@ class ExampleSidebarX extends StatelessWidget {
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Avatar
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  image: athlete!.profile.isNotEmpty
-                      ? DecorationImage(
-                          image: MemoryImage(athlete!.profile),
-                          fit: BoxFit.cover,
-                        )
-                      : null,
-                ),
-                child: athlete!.profile.isEmpty
-                    ? const Icon(Icons.person, color: Colors.white, size: 35)
-                    : null,
+              // Avatar and Overall Score Row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 65,
+                    height: 65,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      image: athlete!.profile.isNotEmpty
+                          ? DecorationImage(
+                              image: MemoryImage(athlete!.profile),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                    ),
+                    child: athlete!.profile.isEmpty
+                        ? const Icon(Icons.person, color: Colors.white, size: 40)
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        "70",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 34,
+                          height: 1.0,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      _getFlagIcon(athlete!.country),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               // Full Name
               Text(
                 athlete!.name.toUpperCase(),
@@ -223,6 +246,7 @@ class ExampleSidebarX extends StatelessWidget {
               // Position
               Text(
                 athlete!.position.toUpperCase(),
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.amber.shade300,
                   fontWeight: FontWeight.bold,
@@ -230,27 +254,17 @@ class ExampleSidebarX extends StatelessWidget {
                   letterSpacing: 1.2,
                 ),
               ),
-              const Divider(color: Colors.white10, height: 16),
-              // Score
-              const Text(
-                "70",
-                style: TextStyle(
+              // Preferred Number
+              Text(
+                "${athlete!.preferredNumber}",
+                textAlign: TextAlign.center,
+                style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,
-                  fontSize: 40,
-                  height: 1.0,
+                  fontSize: 22,
                 ),
               ),
-              Text(
-                "OVERALL SCORE",
-                style: TextStyle(
-                  color: Colors.amber.shade100,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 8,
-                  letterSpacing: 1.5,
-                ),
-              ),
-              const Divider(color: Colors.white10, height: 20),
+              _buildSidebarGradientDivider(12),
               // Abilities
               _buildSidebarStatRow("Reaction", 78, "Agility", 72),
               const SizedBox(height: 8),
@@ -302,6 +316,60 @@ class ExampleSidebarX extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _getFlagIcon(String country) {
+    String emoji = "";
+    switch (country.toLowerCase()) {
+      case 'brazil':
+        emoji = "🇧🇷";
+        break;
+      case 'usa':
+      case 'united states':
+        emoji = "🇺🇸";
+        break;
+      case 'italy':
+        emoji = "🇮🇹";
+        break;
+      case 'germany':
+        emoji = "🇩🇪";
+        break;
+      case 'spain':
+        emoji = "🇪🇸";
+        break;
+      case 'argentina':
+        emoji = "🇦🇷";
+        break;
+      case 'france':
+        emoji = "🇫🇷";
+        break;
+      case 'portugal':
+        emoji = "🇵🇹";
+        break;
+      default:
+        return const Icon(Icons.public, color: Colors.white24, size: 14);
+    }
+    return Text(
+      emoji,
+      style: const TextStyle(fontSize: 16),
+    );
+  }
+
+  Widget _buildSidebarGradientDivider(double height) {
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: height / 2),
+      height: 1.5,
+      width: 150,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.transparent,
+            Colors.amber.shade300.withOpacity(0.5),
+            Colors.transparent,
+          ],
+        ),
+      ),
     );
   }
 }

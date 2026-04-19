@@ -21,7 +21,7 @@ class DatabaseService {
     String path = join(await getDatabasesPath(), 'flyfeet_v14.db');
     final db = await openDatabase(
       path,
-      version: 12, // Bumped to 12 to ensure clean seed after syntax fix
+      version: 13, // Bumped to 13 to add preferred_number
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -48,6 +48,8 @@ class DatabaseService {
     if (oldVersion < 9) await _upgradeToV9(db);
     if (oldVersion < 10) await _upgradeToV10(db);
     if (oldVersion < 11) await _upgradeToV11(db);
+    if (oldVersion < 12) await _upgradeToV12(db);
+    if (oldVersion < 13) await _upgradeToV13(db);
     if (oldVersion < 12) await _upgradeToV12(db);
 
     await _seedDatabase(db);
@@ -269,6 +271,10 @@ class DatabaseService {
     await db.execute('DELETE FROM exercises');
   }
 
+  Future<void> _upgradeToV13(Database db) async {
+    await db.execute('ALTER TABLE athletes ADD COLUMN preferred_number INTEGER DEFAULT 0');
+  }
+
   Future<void> _createTables(Database db) async {
     await db.execute('''
       CREATE TABLE athletes (
@@ -279,6 +285,7 @@ class DatabaseService {
         birth TEXT NOT NULL,
         dominant_foot TEXT NOT NULL,
         position TEXT NOT NULL,
+        preferred_number INTEGER DEFAULT 0,
         profile BLOB NOT NULL,
         timestamp TEXT DEFAULT (datetime('now'))
       )
@@ -379,6 +386,7 @@ class DatabaseService {
         'birth': '1980-07-03',
         'dominant_foot': 'Right',
         'position': 'Middlefield',
+        'preferred_number': 7,
         'profile': profileBytes,
       });
     }

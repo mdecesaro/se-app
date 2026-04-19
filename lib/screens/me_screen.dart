@@ -32,7 +32,53 @@ class MeScreen extends StatelessWidget {
             
             // Header with Profile Image and Name
             Center(
-              child: FifaCard(athlete: athlete!),
+              child: Column(
+                children: [
+                  Container(
+                    width: 140,
+                    height: 140,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.amber, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.amber.withOpacity(0.2),
+                          blurRadius: 15,
+                          spreadRadius: 5,
+                        )
+                      ],
+                      image: athlete!.profile.isNotEmpty
+                          ? DecorationImage(
+                              image: MemoryImage(athlete!.profile),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                    ),
+                    child: athlete!.profile.isEmpty
+                        ? const Icon(Icons.person, size: 80, color: Colors.white24)
+                        : null,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    athlete!.name.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  Text(
+                    athlete!.position.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amber.shade300,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
+              ),
             ),
             
             const SizedBox(height: 32),
@@ -63,6 +109,8 @@ class MeScreen extends StatelessWidget {
                   _buildInfoRow(Icons.cake_outlined, "Birth Date", _formatDate(athlete!.birth)),
                   const Divider(color: Colors.white10, height: 24),
                   _buildInfoRow(Icons.settings_accessibility, "Dominant Foot", athlete!.dominantFoot),
+                  const Divider(color: Colors.white10, height: 24),
+                  _buildInfoRow(Icons.numbers, "Preferred Number", athlete!.preferredNumber.toString()),
                   const Divider(color: Colors.white10, height: 24),
                   _buildInfoRow(Icons.sports_soccer, "Position", athlete!.position),
                 ],
@@ -141,6 +189,23 @@ class FifaCard extends StatelessWidget {
     required this.athlete, 
     this.isCompact = false,
   });
+
+  Widget _buildSidebarGradientDivider(double height) {
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: height / 2),
+      height: 1.5,
+      width: 150,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.transparent,
+            Colors.amber.shade300.withOpacity(0.5),
+            Colors.transparent,
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -250,16 +315,9 @@ class FifaCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  Container(
-                    margin: EdgeInsets.symmetric(vertical: isCompact ? 6 : 10),
-                    height: 1.5,
-                    width: isCompact ? 120 : 200,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.transparent, Colors.amber.shade300, Colors.transparent],
-                      ),
-                    ),
-                  ),
+                  
+                  _buildSidebarGradientDivider(isCompact ? 12 : 20),
+
                   Text(
                     "MOTOR SKILL SCORE",
                     style: TextStyle(

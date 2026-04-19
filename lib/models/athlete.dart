@@ -8,6 +8,7 @@ class Athlete {
   final String birth;
   final String dominantFoot;
   final String position;
+  final int preferredNumber;
   final Uint8List profile; // Store as BLOB
   final String? timestamp;
 
@@ -19,6 +20,7 @@ class Athlete {
     required this.birth,
     required this.dominantFoot,
     required this.position,
+    required this.preferredNumber,
     required this.profile,
     this.timestamp,
   });
@@ -33,6 +35,7 @@ class Athlete {
       'birth': birth,
       'dominant_foot': dominantFoot,
       'position': position,
+      'preferred_number': preferredNumber,
       'profile': profile,
       // 'timestamp': timestamp, // Let SQLite handle this if default is used
     };
@@ -48,6 +51,7 @@ class Athlete {
       birth: map['birth'],
       dominantFoot: map['dominant_foot'],
       position: map['position'],
+      preferredNumber: map['preferred_number'] ?? 0,
       profile: map['profile'],
       timestamp: map['timestamp'],
     );
