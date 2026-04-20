@@ -51,6 +51,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   // Stats from Hardware
   int _hits = 0;
   int _misses = 0;
+  int _totalSessionMs = 0;
   int _currentRound = 1;
   int _targetHitsPerRound = 10;
   int _hitsInRound = 0;
@@ -188,6 +189,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isWaitingForSet = true;
       _hits = 0;
       _misses = 0;
+      _totalSessionMs = 0;
       _currentRound = 1;
       _hitsInRound = 0;
       _results = [];
@@ -336,10 +338,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       int errors = _results.where((r) => r.error != 0).length;
       
       double avgRT = 0;
-      double durationMs = 0;
-      if (_results.isNotEmpty) {
-        avgRT = _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
-        durationMs = _results.map((e) => e.reactionTime).fold(0.0, (a, b) => a + b);
+      int durationMs = _totalSessionMs;
+      if (hits > 0) {
+        final hitResults = _results.where((r) => r.error == 0);
+        avgRT = hitResults.map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
       }
 
       // 4. Insert into evaluation_tests (The Session Header)
@@ -348,7 +350,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         'exercise_id': widget.exercise.id,
         'device_id': 'GRID_AI_DEVICE',
         'platform_version': '1.0.0',
-        'timestamp': DateTime.now().toIso8601String(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
         'stimuli_count': stimuliCount,
         'delay_type': delayType,
         'delay_min_ms': delayMin,
@@ -369,7 +371,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         row['test_id'] = testId;
         
         // Handle types and complex fields
-        row['wrong_stimulus_id'] = row['wrong_stimulus_id'].toString();
+        row['wrong_sensor_id'] = row['wrong_sensor_id'].toString();
         row['distractor_id_color'] = json.encode(row['distractor_id_color']);
         
         await db.insert('evaluation_test_results', row);
@@ -444,7 +446,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         int sensorId = int.tryParse(parts[3]) ?? 0;
         int ms = int.tryParse(parts[4]) ?? 0;
 
-        _recordResult(_currentRound, sensorId, ms, 0, isHit: true);
+        _recordResult(_currentRound, sensorId, ms, isHit: true);
 
         setState(() {
           _hits++;
@@ -464,7 +466,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         int errType = int.tryParse(parts[4]) ?? 1; // 1: TIMEOUT, 2: WRONG
         int wrongSensorId = int.tryParse(parts[5]) ?? 0;
 
-        _recordResult(_currentRound, sensorId, 0, 0, isHit: false, errType: errType, wrongSensorId: wrongSensorId);
+        _recordResult(_currentRound, sensorId, 0, isHit: false, errType: errType, wrongSensorId: wrongSensorId);
 
         setState(() {
           _misses++;
@@ -475,6 +477,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       }
       // EVT|END|total_ms|hits|misses
       else if (evtType == "END" && parts.length >= 5) {
+        _totalSessionMs = int.tryParse(parts[2]) ?? 0;
         _addLog("🏁 Session Summary: ${parts[3]} hits, ${parts[4]} misses");
       }
     } catch (e) {
@@ -482,7 +485,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     }
   }
 
-  void _recordResult(int round, int sensorId, int reactionTimeMs, int delay, 
+  void _recordResult(int round, int sensorId, int reactionTimeMs, 
       {required bool isHit, int errType = 0, int wrongSensorId = 0}) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
@@ -498,11 +501,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       reactionTime: reactionTimeMs,
       stimulusStart: 0, 
       stimulusEnd: reactionTimeMs,
-      delayMs: delay,
-      elapsedSinceStart: 0, 
       error: isHit ? 0 : errType, // 1: TIMEOUT, 2: WRONG
       footUsed: sensorDef.expectedFoot,
-      wrongStimulusId: wrongSensorId,
+      wrongSensorId: wrongSensorId,
       distractorIdColor: [],
     );
 
@@ -706,9 +707,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   Widget _buildStatsBar() {
-    double avgRT = _results.isEmpty 
+    final hits = _results.where((r) => r.error == 0).length;
+    double avgRT = hits == 0 
         ? 0 
-        : _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
+        : _results.where((r) => r.error == 0).map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
 
     return Container(
       padding: const EdgeInsets.all(16),

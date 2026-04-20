@@ -18,10 +18,10 @@ class DatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), 'flyfeet_v14.db');
+    String path = join(await getDatabasesPath(), 'flyfeet_v20.db');
     final db = await openDatabase(
       path,
-      version: 14, 
+      version: 21, 
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -51,6 +51,13 @@ class DatabaseService {
     if (oldVersion < 12) await _upgradeToV12(db);
     if (oldVersion < 13) await _upgradeToV13(db);
     if (oldVersion < 14) await _upgradeToV14(db);
+    if (oldVersion < 15) await _upgradeToV15(db);
+    if (oldVersion < 16) await _upgradeToV16(db);
+    if (oldVersion < 17) await _upgradeToV17(db);
+    if (oldVersion < 18) await _upgradeToV18(db);
+    if (oldVersion < 19) await _upgradeToV19(db);
+    if (oldVersion < 20) await _upgradeToV20(db);
+    if (oldVersion < 21) await _upgradeToV21(db);
 
     await _seedDatabase(db);
   }
@@ -141,9 +148,9 @@ class DatabaseService {
             stimulus_position TEXT,
             stimulus_type TEXT,
             correct_color TEXT,
-            reaction_time REAL,
-            stimulus_start REAL,
-            stimulus_end REAL,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
             delay_ms INTEGER,
             elapsed_since_start REAL,
             error INTEGER,
@@ -179,7 +186,7 @@ class DatabaseService {
             hits INTEGER,
             errors INTEGER,
             avg_reaction_time REAL,
-            duration_ms REAL,
+            duration_ms INTEGER,
             FOREIGN KEY (athlete_id) REFERENCES athletes(id),
             FOREIGN KEY (exercise_id) REFERENCES exercises(id)
         )
@@ -194,9 +201,9 @@ class DatabaseService {
             stimulus_position TEXT,
             stimulus_type TEXT,
             correct_color TEXT,
-            reaction_time REAL,
-            stimulus_start REAL,
-            stimulus_end REAL,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
             delay_ms INTEGER,
             elapsed_since_start REAL,
             error INTEGER,
@@ -279,6 +286,236 @@ class DatabaseService {
     await db.execute('DELETE FROM exercises');
   }
 
+  Future<void> _upgradeToV15(Database db) async {
+    // SQLite doesn't support DROP COLUMN directly in older versions, 
+    // but the evaluation_test_results table is recreate-able since it's transient/test data
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV16(Database db) async {
+    // Recreating to ensure elapsed_since_start is gone
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV17(Database db) async {
+    // Recreating to ensure elapsed_since_start is gone
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV18(Database db) async {
+    // Recreating to add delay_ms back and fix wrong_sensor_id
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV19(Database db) async {
+    // Recreating to remove delay_ms
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV20(Database db) async {
+    // Recreating evaluation_tests to change duration_ms from REAL to INTEGER
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('DROP TABLE IF EXISTS evaluation_tests');
+
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp TEXT,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV21(Database db) async {
+    // Recreating evaluation_tests to change timestamp from TEXT to INTEGER
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('DROP TABLE IF EXISTS evaluation_tests');
+
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp INTEGER,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
   Future<void> _createTables(Database db) async {
     await db.execute('''
       CREATE TABLE athletes (
@@ -322,7 +559,58 @@ class DatabaseService {
 
     await _upgradeToV3(db); // sensors
     await _upgradeToV4(db); // movement_ranges
-    await _upgradeToV8(db); // evaluation tables
+    
+    // Evaluation tables (V21 state - timestamp as INTEGER)
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp INTEGER,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+
+    await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_eval_test_results_test_id
+        ON evaluation_test_results (test_id)
+    ''');
   }
 
   Future<void> _seedDatabase(Database db) async {

@@ -7,11 +7,9 @@ class EvaluationResult {
   final int reactionTime;
   final int stimulusStart;
   final int stimulusEnd;
-  final int delayMs;
-  final int elapsedSinceStart;
   final int error;
   final String footUsed;
-  final int wrongStimulusId;
+  final int wrongSensorId;
   final String? distractorType;
   final List<Map<String, dynamic>> distractorIdColor;
 
@@ -24,11 +22,9 @@ class EvaluationResult {
     required this.reactionTime,
     required this.stimulusStart,
     required this.stimulusEnd,
-    required this.delayMs,
-    required this.elapsedSinceStart,
     required this.error,
     required this.footUsed,
-    required this.wrongStimulusId,
+    required this.wrongSensorId,
     this.distractorType,
     required this.distractorIdColor,
   });
@@ -43,11 +39,9 @@ class EvaluationResult {
       'reaction_time': reactionTime,
       'stimulus_start': stimulusStart,
       'stimulus_end': stimulusEnd,
-      'delay_ms': delayMs,
-      'elapsed_since_start': elapsedSinceStart,
       'error': error,
       'foot_used': footUsed,
-      'wrong_stimulus_id': wrongStimulusId,
+      'wrong_sensor_id': wrongSensorId,
       'distractor_type': distractorType,
       'distractor_id_color': distractorIdColor,
     };
