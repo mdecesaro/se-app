@@ -18,10 +18,10 @@ class DatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), 'flyfeet_v14.db');
+    String path = join(await getDatabasesPath(), 'flyfeet_v20.db');
     final db = await openDatabase(
       path,
-      version: 13, // Bumped to 13 to add preferred_number
+      version: 21, 
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -50,7 +50,14 @@ class DatabaseService {
     if (oldVersion < 11) await _upgradeToV11(db);
     if (oldVersion < 12) await _upgradeToV12(db);
     if (oldVersion < 13) await _upgradeToV13(db);
-    if (oldVersion < 12) await _upgradeToV12(db);
+    if (oldVersion < 14) await _upgradeToV14(db);
+    if (oldVersion < 15) await _upgradeToV15(db);
+    if (oldVersion < 16) await _upgradeToV16(db);
+    if (oldVersion < 17) await _upgradeToV17(db);
+    if (oldVersion < 18) await _upgradeToV18(db);
+    if (oldVersion < 19) await _upgradeToV19(db);
+    if (oldVersion < 20) await _upgradeToV20(db);
+    if (oldVersion < 21) await _upgradeToV21(db);
 
     await _seedDatabase(db);
   }
@@ -141,9 +148,9 @@ class DatabaseService {
             stimulus_position TEXT,
             stimulus_type TEXT,
             correct_color TEXT,
-            reaction_time REAL,
-            stimulus_start REAL,
-            stimulus_end REAL,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
             delay_ms INTEGER,
             elapsed_since_start REAL,
             error INTEGER,
@@ -179,7 +186,7 @@ class DatabaseService {
             hits INTEGER,
             errors INTEGER,
             avg_reaction_time REAL,
-            duration_ms REAL,
+            duration_ms INTEGER,
             FOREIGN KEY (athlete_id) REFERENCES athletes(id),
             FOREIGN KEY (exercise_id) REFERENCES exercises(id)
         )
@@ -194,9 +201,9 @@ class DatabaseService {
             stimulus_position TEXT,
             stimulus_type TEXT,
             correct_color TEXT,
-            reaction_time REAL,
-            stimulus_start REAL,
-            stimulus_end REAL,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
             delay_ms INTEGER,
             elapsed_since_start REAL,
             error INTEGER,
@@ -275,6 +282,240 @@ class DatabaseService {
     await db.execute('ALTER TABLE athletes ADD COLUMN preferred_number INTEGER DEFAULT 0');
   }
 
+  Future<void> _upgradeToV14(Database db) async {
+    await db.execute('DELETE FROM exercises');
+  }
+
+  Future<void> _upgradeToV15(Database db) async {
+    // SQLite doesn't support DROP COLUMN directly in older versions, 
+    // but the evaluation_test_results table is recreate-able since it's transient/test data
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV16(Database db) async {
+    // Recreating to ensure elapsed_since_start is gone
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV17(Database db) async {
+    // Recreating to ensure elapsed_since_start is gone
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV18(Database db) async {
+    // Recreating to add delay_ms back and fix wrong_sensor_id
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV19(Database db) async {
+    // Recreating to remove delay_ms
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV20(Database db) async {
+    // Recreating evaluation_tests to change duration_ms from REAL to INTEGER
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('DROP TABLE IF EXISTS evaluation_tests');
+
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp TEXT,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
+  Future<void> _upgradeToV21(Database db) async {
+    // Recreating evaluation_tests to change timestamp from TEXT to INTEGER
+    await db.execute('DROP TABLE IF EXISTS evaluation_test_results');
+    await db.execute('DROP TABLE IF EXISTS evaluation_tests');
+
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp INTEGER,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+  }
+
   Future<void> _createTables(Database db) async {
     await db.execute('''
       CREATE TABLE athletes (
@@ -318,7 +559,58 @@ class DatabaseService {
 
     await _upgradeToV3(db); // sensors
     await _upgradeToV4(db); // movement_ranges
-    await _upgradeToV8(db); // evaluation tables
+    
+    // Evaluation tables (V21 state - timestamp as INTEGER)
+    await db.execute('''
+        CREATE TABLE evaluation_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            exercise_id INTEGER,
+            device_id TEXT,
+            platform_version TEXT,
+            timestamp INTEGER,
+            stimuli_count INTEGER,
+            delay_type TEXT,
+            delay_min_ms INTEGER,
+            delay_max_ms INTEGER,
+            execution_rounds INTEGER,
+            timeout_ms INTEGER,
+            repeat_if_wrong INTEGER,
+            total_attempts INTEGER,
+            hits INTEGER,
+            errors INTEGER,
+            avg_reaction_time REAL,
+            duration_ms INTEGER,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+            FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+        )
+    ''');
+
+    await db.execute('''
+        CREATE TABLE evaluation_test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id INTEGER NOT NULL,
+            round_num INTEGER NOT NULL,
+            stimulus_id INTEGER NOT NULL,
+            stimulus_position TEXT,
+            stimulus_type TEXT,
+            correct_color TEXT,
+            reaction_time INTEGER,
+            stimulus_start INTEGER,
+            stimulus_end INTEGER,
+            error INTEGER,
+            foot_used TEXT,
+            wrong_sensor_id TEXT,
+            distractor_type TEXT,
+            distractor_id_color TEXT,
+            FOREIGN KEY (test_id) REFERENCES evaluation_tests (id) ON DELETE CASCADE
+        )
+    ''');
+
+    await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_eval_test_results_test_id
+        ON evaluation_test_results (test_id)
+    ''');
   }
 
   Future<void> _seedDatabase(Database db) async {
@@ -332,12 +624,12 @@ class DatabaseService {
 
     await db.execute('''
       INSERT OR IGNORE INTO exercises (category_id, name, description, level, objective, modality, parameters, board_size, active) VALUES
-      (2, 'Lite Light Tap', 'A gentle introduction to reaction training. Focus on establishing a baseline rhythm and familiarizing yourself with the sensor layout.', 1, 'Rhythm & Response', 'Single-Touch', '{"parameters": {"stimuli_count": 14, "stimuli_generation_mode": "random", "stimuli_sequence": [], "stimulus_type": "color", "correct_color": "#00FF00", "delay_type": "fixed", "delay_range_ms": [1000], "execution_rounds": 1, "timeout_ms": 0, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Rapid Response', 'Step up the pace. The delay between lights is shorter and unpredictable, forcing your nervous system to stay alert and ready for the next strike.', 1, 'Explosive Reaction', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_generation_mode": "random", "stimuli_sequence": [], "stimulus_type": "color", "correct_color": "#00FF00", "delay_type": "range", "delay_range_ms": [400, 900], "execution_rounds": 1, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Neural Blitz', 'The ultimate performance test. High-frequency stimuli with tight time windows. You must strike fast or you''ll miss the window. Maximum intensity.', 2, 'Agility', 'Single-Touch', '{"parameters": {"stimuli_count": 30, "stimuli_generation_mode": "random", "stimuli_sequence": [], "stimulus_type": "color", "correct_color": "#00FF00", "delay_type": "range", "delay_range_ms": [200, 600], "execution_rounds": 1, "timeout_ms": 750, "repeat_if_wrong": true}}', 14, 1),
-      (2, 'Focus Filter', 'Maintain your focus on the target color while secondary sensors try to pull your attention away. Do not let the noise slow you down.', 3, 'Selective Attention', 'Single-Touch', '{"parameters": {"stimuli_count": 15, "stimuli_generation_mode": "random", "stimulus_type": "color", "correct_color": "#00FF00", "distractor_type": "color", "distractor_colors": ["#FF0000"], "distractor_ncolors_at_time": 1, "delay_type": "fixed", "delay_range_ms": [800], "timeout_ms": 1200, "execution_rounds": 1, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Peripheral Chaos', 'Multiple sensors will light up simultaneously. Your mission is to find and hit the green target while ignoring the blue and red decoys.', 4, 'Peripheral Vision', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_generation_mode": "random", "stimulus_type": "color", "correct_color": "#00FF00", "distractor_type": "color", "distractor_colors": ["#FF0000", "#0000FF"], "distractor_ncolors_at_time": 2, "delay_type": "range", "delay_range_ms": [500, 1000], "timeout_ms": 1000, "execution_rounds": 1, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Split-Second Choice', 'The ultimate test of discrimination. Correct and incorrect colors appear with very short windows. Precision is just as important as speed.', 5, 'Discrimination', 'Single-Touch', '{"parameters": {"stimuli_count": 25, "stimuli_generation_mode": "random", "stimulus_type": "color", "correct_color": "#00FF00", "distractor_type": "color", "distractor_colors": ["#FF0000", "#FFFF00", "#FFFFFF"], "distractor_ncolors_at_time": 3, "delay_type": "range", "delay_range_ms": [300, 700], "timeout_ms": 800, "repeat_if_wrong": true, "execution_rounds": 1}}', 14, 1)
+      (2, 'Lite Light Tap', 'A gentle introduction to reaction training. Focus on establishing a baseline rhythm and familiarizing yourself with the sensor layout.', 1, 'Rhythm & Response', 'Single-Touch', '{"parameters": {"stimuli_count": 14, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 1, "delay_min": 1000, "delay_max": 1000, "timeout_ms": 0, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Rapid Response', 'Step up the pace. The delay between lights is shorter and unpredictable, forcing your nervous system to stay alert and ready for the next strike.', 1, 'Explosive Reaction', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 2, "delay_min": 400, "delay_max": 900, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Neural Blitz', 'The ultimate performance test. High-frequency stimuli with tight time windows. You must strike fast or you''ll miss the window. Maximum intensity.', 2, 'Agility', 'Single-Touch', '{"parameters": {"stimuli_count": 30, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 2, "delay_min": 200, "delay_max": 600, "timeout_ms": 750, "repeat_if_wrong": true}}', 14, 1),
+      (2, 'Focus Filter', 'Maintain your focus on the target color while secondary sensors try to pull your attention away. Do not let the noise slow you down.', 3, 'Selective Attention', 'Single-Touch', '{"parameters": {"stimuli_count": 15, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 1, "dist_colors": ["#FF0000"], "delay_type": 1, "delay_min": 800, "delay_max": 800, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Peripheral Chaos', 'Multiple sensors will light up simultaneously. Your mission is to find and hit the green target while ignoring the blue and red decoys.', 4, 'Peripheral Vision', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 2, "dist_colors": ["#FF0000", "#0000FF"], "delay_type": 2, "delay_min": 500, "delay_max": 1000, "timeout_ms": 1000, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Split-Second Choice', 'The ultimate test of discrimination. Correct and incorrect colors appear with very short windows. Precision is just as important as speed.', 5, 'Discrimination', 'Single-Touch', '{"parameters": {"stimuli_count": 25, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 3, "dist_colors": ["#FF0000", "#FFFF00", "#FFFFFF"], "delay_type": 2, "delay_min": 300, "delay_max": 700, "timeout_ms": 800, "repeat_if_wrong": true}}', 14, 1)
     ''');
 
     await db.execute('''

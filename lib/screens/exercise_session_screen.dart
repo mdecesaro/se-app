@@ -51,6 +51,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   // Stats from Hardware
   int _hits = 0;
   int _misses = 0;
+  int _totalSessionMs = 0;
+  int _currentRound = 1;
+  int _targetHitsPerRound = 10;
+  int _hitsInRound = 0;
   int _currentTarget = -1;
   Map<int, String> _activeDistractors = {};
   String _correctColor = "#${0xffffff.toRadixString(16)}";
@@ -126,70 +130,57 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       final params = data['parameters'] ?? {};
 
       // 1. stimuli_count
-      int count = params['stimuli_count'] ?? 10;
+      final int count = params['stimuli_count'] ?? 10;
 
-      // 2. manual (0=random, 1=defined)
-      String mode = params['stimuli_generation_mode'] ?? 'random';
-      List<dynamic> sequence = params['stimuli_sequence'] ?? [];
-      int manual = (mode == 'defined' || sequence.isNotEmpty) ? 1 : 0;
+      // 2. stimuli_rounds
+      final int rounds = params['stimuli_rounds'] ?? 1;
 
-      // 3. delay (fixed or min,max)
-      String delay = "500";
-      if (params['delay_type'] == "range" && params['delay_range_ms'] is List) {
-        final List dr = params['delay_range_ms'];
-        delay = dr.length > 1 ? "${dr[0]},${dr[1]}" : "${dr[0]}";
-      } else if (params['delay_range_ms'] is List && (params['delay_range_ms'] as List).isNotEmpty) {
-        delay = "${params['delay_range_ms'][0]}";
+      // 3. stimuli_mode (1: Random, 2: Pattern)
+      final int mode = params['stimuli_mode'] ?? 1;
+
+      // 4. stimuli_color (HEX no #)
+      final String color = _colorToHex(params['stimuli_color'] ?? "#00FF00");
+
+      // 5. dist_qty
+      final int distQty = params['dist_qty'] ?? 0;
+
+      // 6. dist_colors (comma-separated hex or 0)
+      String distColors = "0";
+      if (distQty > 0 && params['dist_colors'] is List) {
+        distColors = (params['dist_colors'] as List).map((c) => _colorToHex(c)).join(',');
       }
 
-      // 4. rounds
-      int rounds = params['execution_rounds'] ?? 1;
+      // 7. delay_type (1: Fixed, 2: Range)
+      final int delayType = params['delay_type'] ?? 1;
 
-      // 5. correct_color
-      String color = _colorToHex(params['correct_color']);
+      // 8. delay_min
+      final int delayMin = params['delay_min'] ?? 500;
 
-      // 6. stimulus_type
-      String stimType = params['stimulus_type'] ?? "color";
+      // 9. delay_max
+      final int delayMax = params['delay_max'] ?? 500;
 
-      // 7. distractor_type
-      String distType = params['distractor_type'] ?? "none";
+      // 10. timeout_ms
+      final int timeout = params['timeout_ms'] ?? 0;
 
-      // 8. distractor_count
-      int distCount = params['distractor_ncolors_at_time'] ?? 0;
+      // 11. repeat_if_wrong (1 or 0)
+      final int repeat = (params['repeat_if_wrong'] == true) ? 1 : 0;
 
-      // 9. distractor_colors (comma-separated hex)
-      List distColorsList = params['distractor_colors'] ?? [];
-      String distColors = distColorsList.map((c) => _colorToHex(c)).join(',');
-      if (distColors.isEmpty) distColors = "000000";
-
-      // 10. timeout
-      int timeout = params['timeout_ms'] ?? 0;
-
-      // 11. repeat_if_wrong
-      int repeat = (params['repeat_if_wrong'] == true) ? 1 : 0;
-
-      // SET|count|manual|delay|rounds|color|stim_type|dist_type|dist_count|dist_colors|timeout|repeat
-      String command = "SET|$count|$manual|$delay|$rounds|$color|$stimType|$distType|$distCount|$distColors|$timeout|$repeat";
-      
-      // 12. sequence (appended at the end)
-      if (manual == 1 && sequence.isNotEmpty) {
-        command += "|${sequence.join(',')}";
-      }
-
-      return command;
+      // Format: SET|count|rounds|mode|color|dist_qty|dist_colors|delay_type|delay_min|delay_max|timeout|repeat
+      return "SET|$count|$rounds|$mode|$color|$distQty|$distColors|$delayType|$delayMin|$delayMax|$timeout|$repeat";
     } catch (e) {
       _addLog("Protocol Error: $e");
-      return "SET|10|0|500|1|ffffff|color|none|0|000000|0|0";
+      return "SET|10|1|1|00FF00|0|0|1|500|500|0|0";
     }
   }
 
   void _startSession() async {
     String setCommand = _buildProtocolCommand();
     
-    // Extract color for UI
+    // Extract info for UI and tracking
     List<String> parts = setCommand.split('|');
-    if (parts.length >= 6) {
-      _correctColor = "#${parts[5]}";
+    if (parts.length >= 5) {
+      _targetHitsPerRound = int.tryParse(parts[1]) ?? 10;
+      _correctColor = "#${parts[4]}";
     }
 
     setState(() {
@@ -198,6 +189,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isWaitingForSet = true;
       _hits = 0;
       _misses = 0;
+      _totalSessionMs = 0;
+      _currentRound = 1;
+      _hitsInRound = 0;
       _results = [];
       _currentTarget = -1;
       _activeDistractors = {};
@@ -330,38 +324,38 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       }
       
       final int stimuliCount = params['stimuli_count'] ?? 0;
-      final String delayType = params['delay_type'] ?? 'fixed';
-      final List<dynamic> delayRange = params['delay_range_ms'] ?? [700];
-      final int delayMin = delayRange.isNotEmpty ? (delayRange.first as num).toInt() : 0;
-      final int delayMax = delayRange.length > 1 ? (delayRange.last as num).toInt() : delayMin;
-      final int executionRounds = params['execution_rounds'] ?? 1;
+      final int dType = params['delay_type'] ?? 1;
+      final String delayType = dType == 1 ? 'fixed' : 'range';
+      final int delayMin = params['delay_min'] ?? 0;
+      final int delayMax = params['delay_max'] ?? delayMin;
+      final int stimuliRounds = params['stimuli_rounds'] ?? 1;
       final int timeoutMs = params['timeout_ms'] ?? 0;
       final bool repeatIfWrong = params['repeat_if_wrong'] ?? false;
 
-      // 3. Calculate Session Stats (Mirroring Python Controller)
+      // 3. Calculate Session Stats
       int totalAttempts = _results.length;
       int hits = _results.where((r) => r.error == 0).length;
       int errors = _results.where((r) => r.error != 0).length;
       
       double avgRT = 0;
-      double durationMs = 0;
-      if (_results.isNotEmpty) {
-        avgRT = _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
-        durationMs = _results.map((e) => e.reactionTime).reduce((a, b) => a + b).toDouble();
+      int durationMs = _totalSessionMs;
+      if (hits > 0) {
+        final hitResults = _results.where((r) => r.error == 0);
+        avgRT = hitResults.map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
       }
 
       // 4. Insert into evaluation_tests (The Session Header)
       int testId = await db.insert('evaluation_tests', {
         'athlete_id': athleteId,
         'exercise_id': widget.exercise.id,
-        'device_id': 'GRID_AI_DEVICE', // Identifier replaced to avoid typo warning
+        'device_id': 'GRID_AI_DEVICE',
         'platform_version': '1.0.0',
-        'timestamp': DateTime.now().toIso8601String(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
         'stimuli_count': stimuliCount,
         'delay_type': delayType,
         'delay_min_ms': delayMin,
         'delay_max_ms': delayMax,
-        'execution_rounds': executionRounds,
+        'execution_rounds': stimuliRounds,
         'timeout_ms': timeoutMs,
         'repeat_if_wrong': repeatIfWrong ? 1 : 0,
         'total_attempts': totalAttempts,
@@ -377,7 +371,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         row['test_id'] = testId;
         
         // Handle types and complex fields
-        row['wrong_stimulus_id'] = row['wrong_stimulus_id'].toString();
+        row['wrong_sensor_id'] = row['wrong_sensor_id'].toString();
         row['distractor_id_color'] = json.encode(row['distractor_id_color']);
         
         await db.insert('evaluation_test_results', row);
@@ -410,21 +404,30 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
       String evtType = parts[1];
 
-      // EVT|ON|round|sensorIdx|correct_color|dist_ids|dist_colors
-      if (evtType == "ON" && parts.length >= 4) {
+      // EVT|ON|stimuli_mode|sensor_id|stimuli_color|dist_qty|dist_colors
+      if (evtType == "ON" && parts.length >= 7) {
         int sensorId = int.tryParse(parts[3]) ?? 0;
-        String? newCorrectColor;
+        String newCorrectColor = parts[4];
+        int distQty = int.tryParse(parts[5]) ?? 0;
+        String distColorsRaw = parts[6];
+        
         Map<int, String> newDistractors = {};
-
-        if (parts.length >= 7) {
-          newCorrectColor = parts[4];
-          List<String> distIds = parts[5].split(',');
-          List<String> distColors = parts[6].split(',');
-          for (int i = 0; i < distIds.length; i++) {
-            int? id = int.tryParse(distIds[i]);
-            if (id != null && i < distColors.length) {
-              String color = distColors[i];
-              newDistractors[id] = color.startsWith('#') ? color : "#$color";
+        if (distQty > 0 && distColorsRaw != "0") {
+          // Robust parsing for dist_colors (supports id:color or id)
+          List<String> items = distColorsRaw.split(',');
+          for (var item in items) {
+            if (item.contains(':')) {
+              List<String> pair = item.split(':');
+              int? id = int.tryParse(pair[0]);
+              if (id != null) {
+                String color = pair[1];
+                newDistractors[id] = color.startsWith('#') ? color : "#$color";
+              }
+            } else {
+              int? id = int.tryParse(item);
+              if (id != null) {
+                newDistractors[id] = "#FF0000"; // Fallback
+              }
             }
           }
         }
@@ -432,46 +435,63 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() {
           _currentTarget = sensorId;
           _activeDistractors = newDistractors;
-          if (newCorrectColor != null && newCorrectColor.isNotEmpty) {
+          if (newCorrectColor.isNotEmpty && newCorrectColor != "0") {
             _correctColor = newCorrectColor.startsWith('#') ? newCorrectColor : "#$newCorrectColor";
           }
         });
         _addLog("Target ON: Sensor $sensorId");
       }
-      // EVT|HIT|round|sensorIdx|ms|delay
-      else if (evtType == "HIT" && parts.length >= 6) {
-        int round = int.tryParse(parts[2]) ?? 0;
-        int sensorId = int.tryParse(parts[3]) ?? 0;
-        int ms = int.tryParse(parts[4]) ?? 0;
-        int delay = int.tryParse(parts[5]) ?? 0;
+      // EVT|HIT|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|reaction_time
+      else if (evtType == "HIT" && parts.length >= 8) {
+        int stimuliStart = int.tryParse(parts[3]) ?? 0;
+        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
+        int sensorId = int.tryParse(parts[5]) ?? 0;
+        int ms = int.tryParse(parts[7]) ?? 0;
 
-        _recordResult(round, sensorId, ms, delay, isHit: true);
+        _recordResult(_currentRound, sensorId, ms, 
+          isHit: true, 
+          stimuliStart: stimuliStart, 
+          stimuliEnd: stimuliEnd
+        );
 
         setState(() {
           _hits++;
+          _hitsInRound++;
+          if (_hitsInRound >= _targetHitsPerRound) {
+            _currentRound++;
+            _hitsInRound = 0;
+          }
           _currentTarget = -1;
           _activeDistractors = {};
         });
         _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
       }
-      // EVT|MISS|round|sensorIdx|REASON|delay
-      else if (evtType == "MISS" && parts.length >= 6) {
-        int round = int.tryParse(parts[2]) ?? 0;
-        int sensorId = int.tryParse(parts[3]) ?? 0;
-        String reason = parts[4]; // TIMEOUT or ERROR
-        int delay = int.tryParse(parts[5]) ?? 0;
+      // EVT|MISS|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|wrong_sensor_id
+      else if (evtType == "MISS" && parts.length >= 8) {
+        int stimuliStart = int.tryParse(parts[3]) ?? 0;
+        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
+        int sensorId = int.tryParse(parts[5]) ?? 0;
+        int errType = int.tryParse(parts[6]) ?? 1; // 1: TIMEOUT, 2: WRONG
+        int wrongSensorId = int.tryParse(parts[7]) ?? 0;
 
-        _recordResult(round, sensorId, 0, delay, isHit: false, reason: reason);
+        _recordResult(_currentRound, sensorId, 0, 
+          isHit: false, 
+          errType: errType, 
+          wrongSensorId: wrongSensorId,
+          stimuliStart: stimuliStart,
+          stimuliEnd: stimuliEnd
+        );
 
         setState(() {
           _misses++;
           _currentTarget = -1;
           _activeDistractors = {};
         });
-        _addLog("MISS! $reason at Sensor $sensorId");
+        _addLog("MISS! ${errType == 1 ? 'TIMEOUT' : 'WRONG'} at Sensor $sensorId");
       }
       // EVT|END|total_ms|hits|misses
       else if (evtType == "END" && parts.length >= 5) {
+        _totalSessionMs = int.tryParse(parts[2]) ?? 0;
         _addLog("🏁 Session Summary: ${parts[3]} hits, ${parts[4]} misses");
       }
     } catch (e) {
@@ -479,7 +499,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     }
   }
 
-  void _recordResult(int round, int sensorId, int reactionTimeMs, int delay, {required bool isHit, String reason = ""}) {
+  void _recordResult(int round, int sensorId, int reactionTimeMs, 
+      {required bool isHit, int errType = 0, int wrongSensorId = 0, int stimuliStart = 0, int stimuliEnd = 0}) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
       orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown", expectedFoot: "unknown"),
@@ -492,13 +513,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       stimulusType: "color",
       correctColor: _correctColor,
       reactionTime: reactionTimeMs,
-      stimulusStart: 0, 
-      stimulusEnd: reactionTimeMs,
-      delayMs: delay,
-      elapsedSinceStart: 0, 
-      error: isHit ? 0 : (reason == "TIMEOUT" ? 2 : 1),
+      stimulusStart: stimuliStart, 
+      stimulusEnd: stimuliEnd,
+      error: isHit ? 0 : errType, // 1: TIMEOUT, 2: WRONG
       footUsed: sensorDef.expectedFoot,
-      wrongStimulusId: 0,
+      wrongSensorId: wrongSensorId,
       distractorIdColor: [],
     );
 
@@ -702,9 +721,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   Widget _buildStatsBar() {
-    double avgRT = _results.isEmpty 
+    final hits = _results.where((r) => r.error == 0).length;
+    double avgRT = hits == 0 
         ? 0 
-        : _results.map((e) => e.reactionTime).reduce((a, b) => a + b) / _results.length;
+        : _results.where((r) => r.error == 0).map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
 
     return Container(
       padding: const EdgeInsets.all(16),
