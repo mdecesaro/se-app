@@ -441,12 +441,18 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         });
         _addLog("Target ON: Sensor $sensorId");
       }
-      // EVT|HIT|stimuli_mode|sensor_id|reaction_time
-      else if (evtType == "HIT" && parts.length >= 5) {
-        int sensorId = int.tryParse(parts[3]) ?? 0;
-        int ms = int.tryParse(parts[4]) ?? 0;
+      // EVT|HIT|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|reaction_time
+      else if (evtType == "HIT" && parts.length >= 8) {
+        int stimuliStart = int.tryParse(parts[3]) ?? 0;
+        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
+        int sensorId = int.tryParse(parts[5]) ?? 0;
+        int ms = int.tryParse(parts[7]) ?? 0;
 
-        _recordResult(_currentRound, sensorId, ms, isHit: true);
+        _recordResult(_currentRound, sensorId, ms, 
+          isHit: true, 
+          stimuliStart: stimuliStart, 
+          stimuliEnd: stimuliEnd
+        );
 
         setState(() {
           _hits++;
@@ -460,13 +466,21 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         });
         _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
       }
-      // EVT|MISS|stimuli_mode|sensor_id|err_type|wrong_sensor_id
-      else if (evtType == "MISS" && parts.length >= 6) {
-        int sensorId = int.tryParse(parts[3]) ?? 0;
-        int errType = int.tryParse(parts[4]) ?? 1; // 1: TIMEOUT, 2: WRONG
-        int wrongSensorId = int.tryParse(parts[5]) ?? 0;
+      // EVT|MISS|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|wrong_sensor_id
+      else if (evtType == "MISS" && parts.length >= 8) {
+        int stimuliStart = int.tryParse(parts[3]) ?? 0;
+        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
+        int sensorId = int.tryParse(parts[5]) ?? 0;
+        int errType = int.tryParse(parts[6]) ?? 1; // 1: TIMEOUT, 2: WRONG
+        int wrongSensorId = int.tryParse(parts[7]) ?? 0;
 
-        _recordResult(_currentRound, sensorId, 0, isHit: false, errType: errType, wrongSensorId: wrongSensorId);
+        _recordResult(_currentRound, sensorId, 0, 
+          isHit: false, 
+          errType: errType, 
+          wrongSensorId: wrongSensorId,
+          stimuliStart: stimuliStart,
+          stimuliEnd: stimuliEnd
+        );
 
         setState(() {
           _misses++;
@@ -486,7 +500,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _recordResult(int round, int sensorId, int reactionTimeMs, 
-      {required bool isHit, int errType = 0, int wrongSensorId = 0}) {
+      {required bool isHit, int errType = 0, int wrongSensorId = 0, int stimuliStart = 0, int stimuliEnd = 0}) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
       orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown", expectedFoot: "unknown"),
@@ -499,8 +513,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       stimulusType: "color",
       correctColor: _correctColor,
       reactionTime: reactionTimeMs,
-      stimulusStart: 0, 
-      stimulusEnd: reactionTimeMs,
+      stimulusStart: stimuliStart, 
+      stimulusEnd: stimuliEnd,
       error: isHit ? 0 : errType, // 1: TIMEOUT, 2: WRONG
       footUsed: sensorDef.expectedFoot,
       wrongSensorId: wrongSensorId,
