@@ -341,7 +341,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       int durationMs = _totalSessionMs;
       if (hits > 0) {
         final hitResults = _results.where((r) => r.error == 0);
-        avgRT = hitResults.map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
+        double rawAvg = hitResults.fold(0, (sum, e) => sum + e.reactionTime) / hits;
+        avgRT = double.parse(rawAvg.toStringAsFixed(1));
       }
 
       // 4. Insert into evaluation_tests (The Session Header)

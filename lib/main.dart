@@ -50,12 +50,20 @@ class _MainScreenState extends State<MainScreen> {
   final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final _key = GlobalKey<ScaffoldState>();
   Athlete? _currentAthlete;
+  Map<String, double> _athleteStats = {
+    'Reaction': 0,
+    'Agility': 0,
+    'Balance': 0,
+    'Decision': 0,
+    'Overall': 0,
+  };
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadAthlete();
+    _loadAthleteStats();
   }
 
   Future<void> _loadAthlete() async {
@@ -67,6 +75,28 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> _loadAthleteStats() async {
+    final db = await DatabaseService().database;
+    
+    // Calculate Average Reaction Time from all tests
+    final List<Map<String, dynamic>> result = await db.rawQuery('''
+      SELECT AVG(avg_reaction_time) as avg_rt FROM evaluation_tests
+    ''');
+    
+    if (result.isNotEmpty && result.first['avg_rt'] != null) {
+      double avgRt = result.first['avg_rt'] as double;
+      
+      // Placeholder logic for stats calculation until more data is available
+      setState(() {
+        _athleteStats['Reaction'] = double.parse(avgRt.toStringAsFixed(1));
+        // Simple mapping: faster reaction = higher score (this is just illustrative)
+        // e.g., 500ms -> 70, 400ms -> 80, etc.
+        double score = (1000 - avgRt) / 10;
+        _athleteStats['Overall'] = double.parse(score.clamp(0, 100).toStringAsFixed(0));
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSmallScreen = MediaQuery.of(context).size.width < 600;
@@ -74,10 +104,18 @@ class _MainScreenState extends State<MainScreen> {
     return Scaffold(
       key: _key,
       backgroundColor: const Color(0xFF121212), // Professional Dark Theme
-      drawer: ExampleSidebarX(controller: _controller, athlete: _currentAthlete),
+      drawer: ExampleSidebarX(
+        controller: _controller, 
+        athlete: _currentAthlete,
+        stats: _athleteStats,
+      ),
       body: Row(
         children: [
-          if (!isSmallScreen) ExampleSidebarX(controller: _controller, athlete: _currentAthlete),
+          if (!isSmallScreen) ExampleSidebarX(
+            controller: _controller, 
+            athlete: _currentAthlete,
+            stats: _athleteStats,
+          ),
           Expanded(
             child: AnimatedBuilder(
               animation: _controller,
@@ -108,10 +146,12 @@ class ExampleSidebarX extends StatelessWidget {
     super.key, 
     required SidebarXController controller,
     this.athlete,
+    required this.stats,
   }) : _controller = controller;
 
   final SidebarXController _controller;
   final Athlete? athlete;
+  final Map<String, double> stats;
 
   @override
   Widget build(BuildContext context) {
@@ -213,9 +253,9 @@ class ExampleSidebarX extends StatelessWidget {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
-                        "70",
-                        style: TextStyle(
+                      Text(
+                        "${stats['Overall']?.toInt() ?? 0}",
+                        style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w900,
                           fontSize: 34,
@@ -266,7 +306,7 @@ class ExampleSidebarX extends StatelessWidget {
               ),
               _buildSidebarGradientDivider(12),
               // Abilities
-              _buildSidebarStatRow("Reaction", 78, "Agility", 72),
+              _buildSidebarStatRow("Reaction", stats['Reaction']!, "Agility", 72),
               const SizedBox(height: 8),
               _buildSidebarStatRow("Balance", 61, "Decision", 69),
             ],
@@ -282,7 +322,7 @@ class ExampleSidebarX extends StatelessWidget {
     );
   }
 
-  Widget _buildSidebarStatRow(String l1, int v1, String l2, int v2) {
+  Widget _buildSidebarStatRow(String l1, double v1, String l2, double v2) {
     return Row(
       children: [
         Expanded(child: _buildSidebarStat(l1, v1)),
@@ -292,7 +332,7 @@ class ExampleSidebarX extends StatelessWidget {
     );
   }
 
-  Widget _buildSidebarStat(String label, int value) {
+  Widget _buildSidebarStat(String label, double value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -308,7 +348,7 @@ class ExampleSidebarX extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         Text(
-          "$value",
+          label == "Reaction" ? "${value.toInt()}" : "${value.toInt()}",
           style: const TextStyle(
             color: Colors.white,
             fontSize: 18,
