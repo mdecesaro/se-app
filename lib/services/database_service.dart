@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/services.dart';
 import '../models/athlete.dart';
+import '../models/evaluation_result.dart';
 import 'package:flutter/foundation.dart';
 
 class DatabaseService {
@@ -76,7 +78,7 @@ class DatabaseService {
       CREATE TABLE IF NOT EXISTS exercises (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           category_id INTEGER NOT NULL,
-          code TEXT UNIQUE NOT NULL,
+          code TEXT,
           name TEXT NOT NULL,
           description TEXT,
           level INTEGER NOT NULL DEFAULT 1,
@@ -624,12 +626,12 @@ class DatabaseService {
 
     await db.execute('''
       INSERT OR IGNORE INTO exercises (category_id, name, description, level, objective, modality, parameters, board_size, active) VALUES
-      (2, 'Lite Light Tap', 'A gentle introduction to reaction training. Focus on establishing a baseline rhythm and familiarizing yourself with the sensor layout.', 1, 'Rhythm & Response', 'Single-Touch', '{"parameters": {"stimuli_count": 14, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 1, "delay_min": 1000, "delay_max": 1000, "timeout_ms": 0, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Rapid Response', 'Step up the pace. The delay between lights is shorter and unpredictable, forcing your nervous system to stay alert and ready for the next strike.', 1, 'Explosive Reaction', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 2, "delay_min": 400, "delay_max": 900, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Neural Blitz', 'The ultimate performance test. High-frequency stimuli with tight time windows. You must strike fast or you''ll miss the window. Maximum intensity.', 2, 'Agility', 'Single-Touch', '{"parameters": {"stimuli_count": 30, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 0, "dist_colors": 0, "delay_type": 2, "delay_min": 200, "delay_max": 600, "timeout_ms": 750, "repeat_if_wrong": true}}', 14, 1),
-      (2, 'Focus Filter', 'Maintain your focus on the target color while secondary sensors try to pull your attention away. Do not let the noise slow you down.', 3, 'Selective Attention', 'Single-Touch', '{"parameters": {"stimuli_count": 15, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 1, "dist_colors": ["#FF0000"], "delay_type": 1, "delay_min": 800, "delay_max": 800, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Peripheral Chaos', 'Multiple sensors will light up simultaneously. Your mission is to find and hit the green target while ignoring the blue and red decoys.', 4, 'Peripheral Vision', 'Single-Touch', '{"parameters": {"stimuli_count": 20, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 2, "dist_colors": ["#FF0000", "#0000FF"], "delay_type": 2, "delay_min": 500, "delay_max": 1000, "timeout_ms": 1000, "repeat_if_wrong": false}}', 14, 1),
-      (2, 'Split-Second Choice', 'The ultimate test of discrimination. Correct and incorrect colors appear with very short windows. Precision is just as important as speed.', 5, 'Discrimination', 'Single-Touch', '{"parameters": {"stimuli_count": 25, "stimuli_rounds": 1, "stimuli_mode": 1, "stimuli_color": "#00FF00", "dist_qty": 3, "dist_colors": ["#FF0000", "#FFFF00", "#FFFFFF"], "delay_type": 2, "delay_min": 300, "delay_max": 700, "timeout_ms": 800, "repeat_if_wrong": true}}', 14, 1)
+      (2, 'Lite Light Tap', 'A gentle introduction to reaction training. Focus on establishing a baseline rhythm and familiarizing yourself with the sensor layout.', 1, 'Rhythm & Response', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 14, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 0, "dist_behavior": 0, "dist_rgbs_hex": [], "delay_type": 1, "delay_min_ms": 1000, "delay_max_ms": 1000, "timeout_ms": 0, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Rapid Response', 'Step up the pace. The delay between lights is shorter and unpredictable, forcing your nervous system to stay alert and ready for the next strike.', 1, 'Explosive Reaction', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 20, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 0, "dist_behavior": 0, "dist_rgbs_hex": [], "delay_type": 2, "delay_min_ms": 400, "delay_max_ms": 900, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Neural Blitz', 'The ultimate performance test. High-frequency stimuli with tight time windows. You must strike fast or you''ll miss the window. Maximum intensity.', 2, 'Agility', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 30, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 0, "dist_behavior": 0, "dist_rgbs_hex": [], "delay_type": 2, "delay_min_ms": 200, "delay_max_ms": 600, "timeout_ms": 750, "repeat_if_wrong": true}}', 14, 1),
+      (2, 'Focus Filter', 'Maintain your focus on the target color while secondary sensors try to pull your attention away. Do not let the noise slow you down.', 3, 'Selective Attention', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 15, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 1, "dist_behavior": 0, "dist_rgbs_hex": ["#FF0000"], "delay_type": 1, "delay_min_ms": 800, "delay_max_ms": 800, "timeout_ms": 1200, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Peripheral Chaos', 'Multiple sensors will light up simultaneously. Your mission is to find and hit the green target while ignoring the blue and red decoys.', 4, 'Peripheral Vision', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 20, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 2, "dist_behavior": 0, "dist_rgbs_hex": ["#FF0000", "#0000FF"], "delay_type": 2, "delay_min_ms": 500, "delay_max_ms": 1000, "timeout_ms": 1000, "repeat_if_wrong": false}}', 14, 1),
+      (2, 'Split-Second Choice', 'The ultimate test of discrimination. Correct and incorrect colors appear with very short windows. Precision is just as important as speed.', 5, 'Discrimination', 'Single-Touch', '{"parameters": {"game_mode": 1, "game_rounds": 1, "game_attempts": 1, "target_qty": 25, "target_logic": 1, "target_rgb_hex": "#00FF00", "dist_mode": 0, "dist_qty": 3, "dist_behavior": 0, "dist_rgbs_hex": ["#FF0000", "#FFFF00", "#FFFFFF"], "delay_type": 2, "delay_min_ms": 300, "delay_max_ms": 700, "timeout_ms": 800, "repeat_if_wrong": true}}', 14, 1)
     ''');
 
     await db.execute('''
@@ -687,5 +689,19 @@ class DatabaseService {
   Future<List<Athlete>> getAthletes() async {
     final db = await database;
     return (await db.query('athletes')).map((m) => Athlete.fromMap(m)).toList();
+  }
+
+  Future<void> saveEvaluationTest(Map<String, dynamic> testData, List<EvaluationResult> results) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final testId = await txn.insert('evaluation_tests', testData);
+      for (var result in results) {
+        final resultMap = result.toMap();
+        resultMap['test_id'] = testId;
+        // Handle complex types for SQLite
+        resultMap['distractor_id_color'] = json.encode(resultMap['distractor_id_color']);
+        await txn.insert('evaluation_test_results', resultMap);
+      }
+    });
   }
 }

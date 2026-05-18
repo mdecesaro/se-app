@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/exercise.dart';
 import '../models/evaluation_result.dart';
@@ -34,12 +35,12 @@ class ExerciseSessionScreen extends StatefulWidget {
 
 class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   final AppBluetoothService _bluetoothService = AppBluetoothService();
-  StreamSubscription? _dataSubscription;
-  String _incomingBuffer = "";
+  StreamSubscription? _eventSubscription;
+  StreamSubscription? _pressureSubscription;
+  StreamSubscription? _lineSubscription;
   
   // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
-  List<int> sensorValues = List.filled(14, 0);
   List<String> executionLog = [];
   final ScrollController _logScrollController = ScrollController();
   
@@ -64,6 +65,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   String _lastSentCommand = "";
   int _countdownValue = -1; // -1 means no countdown
   String? _athleteName;
+  int? _athleteId;
 
   @override
   void initState() {
@@ -77,7 +79,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     try {
       final athletes = await DatabaseService().getAthletes();
       if (athletes.isNotEmpty) {
-        setState(() => _athleteName = athletes.first.name);
+        setState(() {
+          _athleteName = athletes.first.name;
+          _athleteId = athletes.first.id;
+        });
       }
     } catch (e) {
       debugPrint("Error loading athlete: $e");
@@ -99,14 +104,121 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _setupDataListener() {
-    _dataSubscription?.cancel();
-    _dataSubscription = _bluetoothService.lineStream.listen((line) {
-      if (line.startsWith("EVT|") || line == "SET_OK" || line == "START_OK" || line == "DONE") {
-        _handleHardwareEvent(line);
-      } else {
-        _parseSensorData(line);
+    _eventSubscription?.cancel();
+    _pressureSubscription?.cancel();
+    _lineSubscription?.cancel();
+
+    _eventSubscription = _bluetoothService.eventStream.listen((event) {
+      if (event.type == SensorEventType.end && event.totalMs == 0) {
+        // Handle structural reset from service
+        _resetSessionUI();
+        return;
+      }
+      _handleBinaryEvent(event);
+    });
+    
+    _pressureSubscription = _bluetoothService.pressureStream.listen((pressures) {
+      // Pressure is handled via StreamBuilder in _buildCanvas for zero-allocation performance
+    });
+
+    _lineSubscription = _bluetoothService.lineStream.listen((line) {
+      if (line == "ACK" || line == "SET_OK") {
+        if (_isWaitingForSet) {
+          _onSetConfirmed();
+        } else {
+          debugPrint("✔️ SET_OK confirmed.");
+        }
+      } else if (line == "START_OK") {
+        debugPrint("✔️ START confirmed.");
+      } else if (line == "DONE") {
+        _addLog("🏁 DONE - Execution finished.");
+        _finishSession();
+      } else if (!line.startsWith("EVT|") && !line.startsWith("DATA:")) {
+        debugPrint("📨 [RAW FW LOG]: $line");
       }
     });
+  }
+
+  void _resetSessionUI() {
+    if (!mounted) return;
+    _timer?.cancel();
+    stopwatch.stop();
+    setState(() {
+      _isSessionStarted = false;
+      _isFinished = false;
+      _isWaitingForSet = false;
+      _hits = 0;
+      _misses = 0;
+      _currentRound = 1;
+      _hitsInRound = 0;
+      _currentTarget = -1;
+      _activeDistractors = {};
+      _countdownValue = -1;
+    });
+    _addLog("⚠️ Connection Reset - Session Cleared");
+  }
+
+  void _handleBinaryEvent(SensorEvent event) {
+    if (!mounted) return;
+    
+    switch (event.type) {
+      case SensorEventType.on:
+        setState(() {
+          _currentTarget = event.sensorId;
+          _activeDistractors = Map<int, String>.from(event.distractors ?? {});
+          final color = event.color;
+          if (color != null && color.length >= 3) {
+            _correctColor = '#${color[0].toRadixString(16).padLeft(2, '0')}'
+                            '${color[1].toRadixString(16).padLeft(2, '0')}'
+                            '${color[2].toRadixString(16).padLeft(2, '0')}';
+          }
+        });
+        _addLog("Target ON: Sensor ${event.sensorId}");
+        break;
+
+      case SensorEventType.hit:
+        _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0, 
+          isHit: true, 
+          stimuliStart: event.stimuliStart ?? 0, 
+          stimuliEnd: event.stimuliEnd ?? 0
+        );
+
+        setState(() {
+          _hits++;
+          _hitsInRound++;
+          if (_hitsInRound >= _targetHitsPerRound) {
+            _currentRound++;
+            _hitsInRound = 0;
+          }
+          _currentTarget = -1;
+          _activeDistractors = {};
+        });
+        _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
+        break;
+
+      case SensorEventType.miss:
+        _recordResult(_currentRound, event.sensorId, 0, 
+          isHit: false, 
+          errType: event.errorType ?? 1, 
+          wrongSensorId: event.wrongSensorId ?? 0,
+          stimuliStart: event.stimuliStart ?? 0,
+          stimuliEnd: event.stimuliEnd ?? 0
+        );
+
+        setState(() {
+          _misses++;
+          _currentTarget = -1;
+          _activeDistractors = {};
+        });
+        _addLog("MISS! ${event.errorType == 1 ? 'TIMEOUT' : 'WRONG'} at Sensor ${event.sensorId}");
+        break;
+
+      case SensorEventType.end:
+        _totalSessionMs = event.totalMs ?? 0;
+        _addLog("🏁 Session Summary: ${event.hits} hits, ${event.misses} misses");
+        _finishSession();
+        break;
+    }
   }
 
   String _colorToHex(dynamic color) {
@@ -123,85 +235,66 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     return map[c] ?? 'ffffff';
   }
 
-  String _buildProtocolCommand() {
+  void _startSession() async {
     try {
       dynamic data = widget.exercise.parameters;
       if (data is String) data = json.decode(data);
       final params = data['parameters'] ?? {};
 
-      // 1. stimuli_count
-      final int count = params['stimuli_count'] ?? 10;
+      // Prepare UI state
+      setState(() {
+        _isSessionStarted = true;
+        _isFinished = false;
+        _isWaitingForSet = true;
+        _hits = 0;
+        _misses = 0;
+        _totalSessionMs = 0;
+        _currentRound = 1;
+        _hitsInRound = 0;
+        _results = [];
+        _currentTarget = -1;
+        _activeDistractors = {};
+        formattedTime = "00:00.0";
+        
+        _targetHitsPerRound = params['target_qty'] ?? 10;
+        _correctColor = params['target_rgb_hex'] ?? "#00FF00";
+        
+        _addLog("➡️ Sending Binary Configuration...");
+      });
 
-      // 2. stimuli_rounds
-      final int rounds = params['stimuli_rounds'] ?? 1;
-
-      // 3. stimuli_mode (1: Random, 2: Pattern)
-      final int mode = params['stimuli_mode'] ?? 1;
-
-      // 4. stimuli_color (HEX no #)
-      final String color = _colorToHex(params['stimuli_color'] ?? "#00FF00");
-
-      // 5. dist_qty
-      final int distQty = params['dist_qty'] ?? 0;
-
-      // 6. dist_colors (comma-separated hex or 0)
-      String distColors = "0";
-      if (distQty > 0 && params['dist_colors'] is List) {
-        distColors = (params['dist_colors'] as List).map((c) => _colorToHex(c)).join(',');
+      // Send Binary START Command (V1.4.0)
+      debugPrint('[SESSION] Starting game with params: $params');
+      if (_bluetoothService.connectedDevice == null) {
+        _addLog("⚠️ Pod disconnected. Reconnect before starting.");
+        setState(() => _isSessionStarted = false);
+        return;
       }
 
-      // 7. delay_type (1: Fixed, 2: Range)
-      final int delayType = params['delay_type'] ?? 1;
-
-      // 8. delay_min
-      final int delayMin = params['delay_min'] ?? 500;
-
-      // 9. delay_max
-      final int delayMax = params['delay_max'] ?? 500;
-
-      // 10. timeout_ms
-      final int timeout = params['timeout_ms'] ?? 0;
-
-      // 11. repeat_if_wrong (1 or 0)
-      final int repeat = (params['repeat_if_wrong'] == true) ? 1 : 0;
-
-      // Format: SET|count|rounds|mode|color|dist_qty|dist_colors|delay_type|delay_min|delay_max|timeout|repeat
-      return "SET|$count|$rounds|$mode|$color|$distQty|$distColors|$delayType|$delayMin|$delayMax|$timeout|$repeat";
+      await _bluetoothService.sendStartGame(
+        gameMode: params['game_mode'] ?? 1,
+        gameRounds: params['game_rounds'] ?? 1,
+        gameAttempts: params['game_attempts'] ?? 1,
+        targetQty: params['target_qty'] ?? 10,
+        targetLogic: params['target_logic'] ?? 1,
+        targetRGBHex: params['target_rgb_hex'] ?? "#00FF00",
+        distMode: params['dist_mode'] ?? 0,
+        distQty: params['dist_qty'] ?? 0,
+        distBehavior: params['dist_behavior'] ?? 0,
+        distRGBsHex: (params['dist_rgbs_hex'] is List) 
+            ? List<String>.from(params['dist_rgbs_hex']) 
+            : [],
+        delayType: params['delay_type'] ?? 1,
+        delayMinMs: params['delay_min_ms'] ?? 500,
+        delayMaxMs: params['delay_max_ms'] ?? 500,
+        timeoutMs: params['timeout_ms'] ?? 0,
+        repeatIfWrong: params['repeat_if_wrong'] == true,
+      );
+      
+      _lastSentCommand = "START_BINARY";
     } catch (e) {
-      _addLog("Protocol Error: $e");
-      return "SET|10|1|1|00FF00|0|0|1|500|500|0|0";
+      _addLog("❌ Error starting session: $e");
+      setState(() => _isSessionStarted = false);
     }
-  }
-
-  void _startSession() async {
-    String setCommand = _buildProtocolCommand();
-    
-    // Extract info for UI and tracking
-    List<String> parts = setCommand.split('|');
-    if (parts.length >= 5) {
-      _targetHitsPerRound = int.tryParse(parts[1]) ?? 10;
-      _correctColor = "#${parts[4]}";
-    }
-
-    setState(() {
-      _isSessionStarted = true;
-      _isFinished = false;
-      _isWaitingForSet = true;
-      _hits = 0;
-      _misses = 0;
-      _totalSessionMs = 0;
-      _currentRound = 1;
-      _hitsInRound = 0;
-      _results = [];
-      _currentTarget = -1;
-      _activeDistractors = {};
-      formattedTime = "00:00.0";
-      _addLog("➡️ Sent: SET");
-    });
-
-    // 1. Send SET
-    _lastSentCommand = setCommand;
-    await _bluetoothService.sendMessage("$setCommand\n");
   }
 
   void _onSetConfirmed() async {
@@ -209,10 +302,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     
     setState(() {
       _isWaitingForSet = false;
-      _countdownValue = 5;
+      _countdownValue = 5; // Sync with V1.4.0 5-second visual countdown contract
     });
 
-    _addLog("✔️ SET confirmed. Starting countdown...");
+    _addLog("✔️ Configuration applied. Starting countdown...");
 
     Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
@@ -224,18 +317,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         if (_countdownValue > 0) {
           _countdownValue--;
         } else {
-          _countdownValue = -1; // Hide countdown
+          _countdownValue = -1; 
           timer.cancel();
-          _sendStartCommand();
+          _startLocalSessionLogic();
         }
       });
     });
   }
 
-  void _sendStartCommand() async {
-    _addLog("🚀 Sending START...");
+  void _startLocalSessionLogic() {
+    _addLog("🚀 Session GO!");
     
-    // Start the elapsed timer ONLY now
     stopwatch.reset();
     stopwatch.start();
     _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
@@ -248,9 +340,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         formattedTime = "${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}.${(duration.inMilliseconds % 1000 ~/ 100)}";
       });
     });
-
-    _lastSentCommand = "START";
-    await _bluetoothService.sendMessage("START\n");
   }
 
   void _finishSession() {
@@ -263,6 +352,45 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _activeDistractors = {};
     });
     _saveResultsToDatabase();
+  }
+
+  Future<void> _saveResultsToDatabase() async {
+    try {
+      dynamic data = widget.exercise.parameters;
+      if (data is String) data = json.decode(data);
+      final params = data['parameters'] ?? {};
+
+      final hitsList = _results.where((r) => r.error == 0).toList();
+      double avgRT = hitsList.isEmpty 
+          ? 0 
+          : hitsList.map((e) => e.reactionTime).reduce((a, b) => a + b) / hitsList.length;
+
+      final testData = {
+        'athlete_id': _athleteId,
+        'exercise_id': widget.exercise.id,
+        'device_id': _bluetoothService.connectedDevice?.remoteId.toString(),
+        'platform_version': _bluetoothService.firmwareVersion,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'stimuli_count': params['target_qty'],
+        'delay_type': params['delay_type']?.toString(),
+        'delay_min_ms': params['delay_min_ms'],
+        'delay_max_ms': params['delay_max_ms'],
+        'execution_rounds': params['game_rounds'],
+        'timeout_ms': params['timeout_ms'],
+        'repeat_if_wrong': (params['repeat_if_wrong'] == true) ? 1 : 0,
+        'total_attempts': _hits + _misses,
+        'hits': _hits,
+        'errors': _misses,
+        'avg_reaction_time': avgRT,
+        'duration_ms': _totalSessionMs,
+      };
+
+      await DatabaseService().saveEvaluationTest(testData, _results);
+      _addLog("💾 Session saved to database.");
+    } catch (e) {
+      _addLog("❌ Error saving to database: $e");
+      debugPrint("Save Error: $e");
+    }
   }
 
   void _addLog(String message) {
@@ -280,224 +408,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         );
       }
     });
-  }
-
-  void _parseSensorData(String data) {
-    // Ignore echoes and Handshake noise
-    if (data == _lastSentCommand || 
-        data == "HANDSHAKE" ||
-        (data.startsWith("SET|") && _lastSentCommand.startsWith("SET|"))) {
-      return;
-    }
-
-    if (data.startsWith("DATA:")) {
-      try {
-        String valuesPart = data.substring(5);
-        List<String> splitValues = valuesPart.split(',');
-        setState(() {
-          for (int i = 0; i < splitValues.length && i < 14; i++) {
-            sensorValues[i] = int.tryParse(splitValues[i]) ?? 0;
-          }
-        });
-      } catch (e) {
-        debugPrint("Error parsing sensor data: $e");
-      }
-    } else {
-      _addLog("📨 [RAW]: $data");
-    }
-  }
-
-  Future<void> _saveResultsToDatabase() async {
-    if (_results.isEmpty) return;
-    
-    try {
-      final db = await DatabaseService().database;
-      
-      // 1. Get current athlete (for now, the first one in DB)
-      final List<Map<String, dynamic>> athletes = await db.query('athletes', limit: 1);
-      int athleteId = athletes.isNotEmpty ? athletes.first['id'] : 1;
-
-      // 2. Parse parameters from exercise
-      Map<String, dynamic> params = json.decode(widget.exercise.parameters);
-      if (params.containsKey('parameters')) {
-        params = params['parameters'];
-      }
-      
-      final int stimuliCount = params['stimuli_count'] ?? 0;
-      final int dType = params['delay_type'] ?? 1;
-      final String delayType = dType == 1 ? 'fixed' : 'range';
-      final int delayMin = params['delay_min'] ?? 0;
-      final int delayMax = params['delay_max'] ?? delayMin;
-      final int stimuliRounds = params['stimuli_rounds'] ?? 1;
-      final int timeoutMs = params['timeout_ms'] ?? 0;
-      final bool repeatIfWrong = params['repeat_if_wrong'] ?? false;
-
-      // 3. Calculate Session Stats
-      int totalAttempts = _results.length;
-      int hits = _results.where((r) => r.error == 0).length;
-      int errors = _results.where((r) => r.error != 0).length;
-      
-      double avgRT = 0;
-      int durationMs = _totalSessionMs;
-      if (hits > 0) {
-        final hitResults = _results.where((r) => r.error == 0);
-        double rawAvg = hitResults.fold(0, (sum, e) => sum + e.reactionTime) / hits;
-        avgRT = double.parse(rawAvg.toStringAsFixed(1));
-      }
-
-      // 4. Insert into evaluation_tests (The Session Header)
-      int testId = await db.insert('evaluation_tests', {
-        'athlete_id': athleteId,
-        'exercise_id': widget.exercise.id,
-        'device_id': 'GRID_AI_DEVICE',
-        'platform_version': '1.0.0',
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-        'stimuli_count': stimuliCount,
-        'delay_type': delayType,
-        'delay_min_ms': delayMin,
-        'delay_max_ms': delayMax,
-        'execution_rounds': stimuliRounds,
-        'timeout_ms': timeoutMs,
-        'repeat_if_wrong': repeatIfWrong ? 1 : 0,
-        'total_attempts': totalAttempts,
-        'hits': hits,
-        'errors': errors,
-        'avg_reaction_time': avgRT,
-        'duration_ms': durationMs,
-      });
-
-      // 5. Insert each result into evaluation_test_results
-      for (var result in _results) {
-        Map<String, dynamic> row = result.toMap();
-        row['test_id'] = testId;
-        
-        // Handle types and complex fields
-        row['wrong_sensor_id'] = row['wrong_sensor_id'].toString();
-        row['distractor_id_color'] = json.encode(row['distractor_id_color']);
-        
-        await db.insert('evaluation_test_results', row);
-      }
-      
-      _addLog("💾 Data saved successfully (Test ID: $testId).");
-    } catch (e) {
-      _addLog("❌ Error saving data: $e");
-    }
-  }
-
-  void _handleHardwareEvent(String evtLine) {
-    if (evtLine == "DONE") {
-      _addLog("🏁 DONE - Execution finished.");
-      _finishSession();
-      return;
-    }
-    if (evtLine == "SET_OK") {
-      _onSetConfirmed();
-      return;
-    }
-    if (evtLine == "START_OK") {
-      _addLog("✔️ START confirmed.");
-      return;
-    }
-
-    try {
-      List<String> parts = evtLine.split('|');
-      if (parts.length < 2) return;
-
-      String evtType = parts[1];
-
-      // EVT|ON|stimuli_mode|sensor_id|stimuli_color|dist_qty|dist_colors
-      if (evtType == "ON" && parts.length >= 7) {
-        int sensorId = int.tryParse(parts[3]) ?? 0;
-        String newCorrectColor = parts[4];
-        int distQty = int.tryParse(parts[5]) ?? 0;
-        String distColorsRaw = parts[6];
-        
-        Map<int, String> newDistractors = {};
-        if (distQty > 0 && distColorsRaw != "0") {
-          // Robust parsing for dist_colors (supports id:color or id)
-          List<String> items = distColorsRaw.split(',');
-          for (var item in items) {
-            if (item.contains(':')) {
-              List<String> pair = item.split(':');
-              int? id = int.tryParse(pair[0]);
-              if (id != null) {
-                String color = pair[1];
-                newDistractors[id] = color.startsWith('#') ? color : "#$color";
-              }
-            } else {
-              int? id = int.tryParse(item);
-              if (id != null) {
-                newDistractors[id] = "#FF0000"; // Fallback
-              }
-            }
-          }
-        }
-
-        setState(() {
-          _currentTarget = sensorId;
-          _activeDistractors = newDistractors;
-          if (newCorrectColor.isNotEmpty && newCorrectColor != "0") {
-            _correctColor = newCorrectColor.startsWith('#') ? newCorrectColor : "#$newCorrectColor";
-          }
-        });
-        _addLog("Target ON: Sensor $sensorId");
-      }
-      // EVT|HIT|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|reaction_time
-      else if (evtType == "HIT" && parts.length >= 8) {
-        int stimuliStart = int.tryParse(parts[3]) ?? 0;
-        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
-        int sensorId = int.tryParse(parts[5]) ?? 0;
-        int ms = int.tryParse(parts[7]) ?? 0;
-
-        _recordResult(_currentRound, sensorId, ms, 
-          isHit: true, 
-          stimuliStart: stimuliStart, 
-          stimuliEnd: stimuliEnd
-        );
-
-        setState(() {
-          _hits++;
-          _hitsInRound++;
-          if (_hitsInRound >= _targetHitsPerRound) {
-            _currentRound++;
-            _hitsInRound = 0;
-          }
-          _currentTarget = -1;
-          _activeDistractors = {};
-        });
-        _addLog("HIT! Sensor $sensorId - RT: ${ms}ms");
-      }
-      // EVT|MISS|stimuli_mode|stimuli_start|stimuli_end|sensor_id|err_type|wrong_sensor_id
-      else if (evtType == "MISS" && parts.length >= 8) {
-        int stimuliStart = int.tryParse(parts[3]) ?? 0;
-        int stimuliEnd = int.tryParse(parts[4]) ?? 0;
-        int sensorId = int.tryParse(parts[5]) ?? 0;
-        int errType = int.tryParse(parts[6]) ?? 1; // 1: TIMEOUT, 2: WRONG
-        int wrongSensorId = int.tryParse(parts[7]) ?? 0;
-
-        _recordResult(_currentRound, sensorId, 0, 
-          isHit: false, 
-          errType: errType, 
-          wrongSensorId: wrongSensorId,
-          stimuliStart: stimuliStart,
-          stimuliEnd: stimuliEnd
-        );
-
-        setState(() {
-          _misses++;
-          _currentTarget = -1;
-          _activeDistractors = {};
-        });
-        _addLog("MISS! ${errType == 1 ? 'TIMEOUT' : 'WRONG'} at Sensor $sensorId");
-      }
-      // EVT|END|total_ms|hits|misses
-      else if (evtType == "END" && parts.length >= 5) {
-        _totalSessionMs = int.tryParse(parts[2]) ?? 0;
-        _addLog("🏁 Session Summary: ${parts[3]} hits, ${parts[4]} misses");
-      }
-    } catch (e) {
-      _addLog("Parse Error: $e");
-    }
   }
 
   void _recordResult(int round, int sensorId, int reactionTimeMs, 
@@ -519,7 +429,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       error: isHit ? 0 : errType, // 1: TIMEOUT, 2: WRONG
       footUsed: sensorDef.expectedFoot,
       wrongSensorId: wrongSensorId,
-      distractorIdColor: [],
+      distractorIdColor: _activeDistractors.entries.map((e) => {'id': e.key, 'color': e.value}).toList(),
     );
 
     _results.add(result);
@@ -528,10 +438,12 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _dataSubscription?.cancel();
+    _eventSubscription?.cancel();
+    _pressureSubscription?.cancel();
+    _lineSubscription?.cancel();
     _logScrollController.dispose();
     if (_isSessionStarted) {
-      _bluetoothService.sendMessage("STOP\n");
+      _bluetoothService.sendStopGame();
     }
     super.dispose();
   }
@@ -706,14 +618,23 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       margin: const EdgeInsets.all(20),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          return CustomPaint(
-            size: Size(constraints.maxWidth, constraints.maxHeight),
-            painter: MatPainter(
-              sensors: _sensorDefinitions,
-              values: sensorValues,
-              currentTarget: _currentTarget,
-              correctColor: _correctColor,
-              distractors: _activeDistractors,
+          return RepaintBoundary(
+            child: StreamBuilder<Int32List>(
+              stream: _bluetoothService.pressureStream,
+              initialData: _bluetoothService.pressureCache,
+              builder: (context, snapshot) {
+                final values = snapshot.data ?? _bluetoothService.pressureCache;
+                return CustomPaint(
+                  size: Size(constraints.maxWidth, constraints.maxHeight),
+                  painter: MatPainter(
+                    sensors: _sensorDefinitions,
+                    values: values,
+                    currentTarget: _currentTarget,
+                    correctColor: _correctColor,
+                    distractors: _activeDistractors,
+                  ),
+                );
+              },
             ),
           );
         },

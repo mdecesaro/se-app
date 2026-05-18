@@ -11,6 +11,10 @@ import 'models/athlete.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
   
   // Initialize Services
   AppBluetoothService().init();
@@ -64,6 +68,20 @@ class _MainScreenState extends State<MainScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadAthlete();
     _loadAthleteStats();
+    
+    // Add listener to refresh stats when switching to Dashboard
+    _controller.addListener(() {
+      if (_controller.selectedIndex == 0) {
+        _loadAthleteStats();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    // SidebarXController doesn't strictly need manual disposal if not owned here,
+    // but cleaning up listeners is good practice if we were to recreate it.
+    super.dispose();
   }
 
   Future<void> _loadAthlete() async {
@@ -84,15 +102,20 @@ class _MainScreenState extends State<MainScreen> {
     ''');
     
     if (result.isNotEmpty && result.first['avg_rt'] != null) {
-      double avgRt = result.first['avg_rt'] as double;
+      // Safely parse the numeric value from SQLite
+      double avgRt = (result.first['avg_rt'] as num).toDouble();
       
-      // Placeholder logic for stats calculation until more data is available
       setState(() {
         _athleteStats['Reaction'] = double.parse(avgRt.toStringAsFixed(1));
-        // Simple mapping: faster reaction = higher score (this is just illustrative)
-        // e.g., 500ms -> 70, 400ms -> 80, etc.
-        double score = (1000 - avgRt) / 10;
-        _athleteStats['Overall'] = double.parse(score.clamp(0, 100).toStringAsFixed(0));
+        
+        // Score Calculation: 100 points baseline, -1 point for every 10ms over 200ms
+        double score = 100 - ((avgRt - 200) / 10);
+        _athleteStats['Overall'] = score.clamp(0, 100).roundToDouble();
+      });
+    } else {
+      setState(() {
+        _athleteStats['Overall'] = 0;
+        _athleteStats['Reaction'] = 0;
       });
     }
   }
