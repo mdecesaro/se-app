@@ -37,7 +37,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   final AppBluetoothService _bluetoothService = AppBluetoothService();
   StreamSubscription? _eventSubscription;
   StreamSubscription? _pressureSubscription;
-  StreamSubscription? _lineSubscription;
 
   // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
@@ -106,7 +105,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   void _setupDataListener() {
     _eventSubscription?.cancel();
     _pressureSubscription?.cancel();
-    _lineSubscription?.cancel();
 
     _eventSubscription = _bluetoothService.eventStream.listen((event) {
       if (event.type == SensorEventType.end && event.totalMs == 0) {
@@ -119,23 +117,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
     _pressureSubscription = _bluetoothService.pressureStream.listen((pressures) {
       // Pressure is handled via StreamBuilder in _buildCanvas for zero-allocation performance
-    });
-
-    _lineSubscription = _bluetoothService.lineStream.listen((line) {
-      if (line == "ACK" || line == "SET_OK") {
-        if (_isWaitingForSet) {
-          _onSetConfirmed();
-        } else {
-          debugPrint("✔️ SET_OK confirmed.");
-        }
-      } else if (line == "START_OK") {
-        debugPrint("✔️ START confirmed.");
-      } else if (line == "DONE") {
-        _addLog("🏁 DONE - Execution finished.");
-        _finishSession();
-      } else if (!line.startsWith("EVT|") && !line.startsWith("DATA:")) {
-        debugPrint("📨 [RAW FW LOG]: $line");
-      }
     });
   }
 
@@ -162,6 +143,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     if (!mounted) return;
 
     switch (event.type) {
+      case SensorEventType.ack:
+        if (_isWaitingForSet) {
+          _onSetConfirmed();
+        }
+        break;
+
+      case SensorEventType.nack:
+        _addLog("❌ Hardware NACK - Command Rejected");
+        setState(() => _isWaitingForSet = false);
+        break;
+
       case SensorEventType.countdown:
         // Immediate UI update for the first pulse (0x16)
         setState(() {
@@ -250,19 +242,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     }
   }
 
-  String _colorToHex(dynamic color) {
-    if (color == null) return "ffffff";
-    String c = color.toString().toLowerCase();
-    if (c.startsWith('#')) return c.replaceAll('#', '');
 
-    const map = {
-      'green': '00ff00',
-      'red': 'ff0000',
-      'yellow': 'ffff00',
-      'blue': '0000ff'
-    };
-    return map[c] ?? 'ffffff';
-  }
 
   void _startSession() async {
     try {
@@ -319,7 +299,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         repeatIfWrong: params['repeat_if_wrong'] == true,
       );
 
-      _lastSentCommand = "START_BINARY";
+      _lastSentCommand = "START";
     } catch (e) {
       _addLog("❌ Error starting session: $e");
       setState(() => _isSessionStarted = false);
@@ -331,7 +311,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
     setState(() {
       _isWaitingForSet = false;
-      // Anticipate the first pulse by setting 5 immediately upon SET_OK
+      // Anticipate the first pulse by setting 5 immediately upon ACK
       _countdownValue = 5;
     });
 
@@ -463,7 +443,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     _timer?.cancel();
     _eventSubscription?.cancel();
     _pressureSubscription?.cancel();
-    _lineSubscription?.cancel();
     _logScrollController.dispose();
     if (_isSessionStarted) {
       _bluetoothService.sendStopGame();

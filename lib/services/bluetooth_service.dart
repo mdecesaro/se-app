@@ -8,7 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-enum SensorEventType { on, hit, miss, end, countdown, animationStep }
+enum SensorEventType { on, hit, miss, end, countdown, animationStep, ack, nack }
 
 class SensorEvent {
   SensorEvent({
@@ -141,7 +141,8 @@ class _FrameParser {
       final byte = _buf[cursor];
 
       if (byte == _Protocol.msgAck || byte == _Protocol.msgNack) {
-        if (byte == _Protocol.msgAck) {
+        final bool isAck = (byte == _Protocol.msgAck);
+        if (isAck) {
           final result = _tryParseHandshake(cursor);
 
           if (result is _HandshakeSuccess) {
@@ -150,7 +151,12 @@ class _FrameParser {
           }
           if (result is _HandshakeFragment) break;
         }
-        onLine(byte == _Protocol.msgAck ? 'ACK' : 'NACK');
+        onLine(isAck ? 'ACK' : 'NACK');
+        onEvent(SensorEvent(
+          type: isAck ? SensorEventType.ack : SensorEventType.nack,
+          sensorId: 0,
+          mode: 0,
+        ));
         cursor++;
         continue;
       }
@@ -192,14 +198,12 @@ class _FrameParser {
                 .trim();
             if (line.isNotEmpty) {
               onLine(line);
-              if (line.startsWith('EVT|')) _handleLegacyEvent(line);
-              else if (line.startsWith('DATA:')) _handleLegacyData(line);
             }
           } catch (_) { }
-          cursor = isNewline ? end + 1 : end; // Do NOT consume SOF or other control bytes
+          cursor = isNewline ? end + 1 : end;
           continue;
         } else {
-          break; // Wait for more data or a terminator
+          break;
         }
       }
 
@@ -346,94 +350,6 @@ class _FrameParser {
       return _HandshakeSuccess(pos - start);
     } catch (_) {
       return _HandshakeInvalid();
-    }
-  }
-
-  void _handleLegacyData(String line) {
-    try {
-      final parts = line.substring(5).split(',');
-      for (int i = 0; i < parts.length && i < _Protocol.pressureSensors; i++) {
-        _pressureCache[i] = int.parse(parts[i]);
-      }
-      onPressure(Int32List.fromList(_pressureCache));
-    } catch (_) {}
-  }
-
-  void _handleLegacyEvent(String line) {
-    final parts = line.split('|');
-    if (parts.length < 4) return;
-
-    final type = parts[1];
-    final mode = int.tryParse(parts[2]) ?? 1;
-
-    switch (type) {
-      case 'HIT':
-        if (parts.length >= 8) {
-          onEvent(SensorEvent(
-            type:         SensorEventType.hit,
-            mode:         mode,
-            sensorId:     int.tryParse(parts[5]) ?? 0,
-            reactionTime: int.tryParse(parts[7]),
-            stimuliStart: int.tryParse(parts[3]),
-            stimuliEnd:   int.tryParse(parts[4]),
-          ));
-        } else if (parts.length >= 5) {
-          onEvent(SensorEvent(
-            type:         SensorEventType.hit,
-            mode:         mode,
-            sensorId:     int.tryParse(parts[3]) ?? 0,
-            reactionTime: int.tryParse(parts[4]),
-          ));
-        }
-
-      case 'MISS':
-        if (parts.length >= 8) {
-          onEvent(SensorEvent(
-            type:          SensorEventType.miss,
-            mode:          mode,
-            sensorId:      int.tryParse(parts[5]) ?? 0,
-            errorType:     int.tryParse(parts[6]),
-            wrongSensorId: int.tryParse(parts[7]),
-            stimuliStart:  int.tryParse(parts[3]),
-            stimuliEnd:    int.tryParse(parts[4]),
-          ));
-        } else if (parts.length >= 6) {
-          onEvent(SensorEvent(
-            type:          SensorEventType.miss,
-            mode:          mode,
-            sensorId:      int.tryParse(parts[3]) ?? 0,
-            errorType:     int.tryParse(parts[4]),
-            wrongSensorId: int.tryParse(parts[5]),
-          ));
-        }
-
-      case 'ON':
-        final sensorId    = int.tryParse(parts[3]) ?? 0;
-        final color       = parts.length >= 5 ? _hexToRgb(parts[4]) : null;
-        final distractors = <int, String>{};
-
-        if (parts.length >= 7 && parts[5] != '0') {
-          for (final item in parts[6].split(',')) {
-            if (item.contains(':')) {
-              final pair = item.split(':');
-              final id   = int.tryParse(pair[0]);
-              if (id != null) {
-                distractors[id] = pair[1].startsWith('#') ? pair[1] : '#${pair[1]}';
-              }
-            } else {
-              final id = int.tryParse(item);
-              if (id != null) distractors[id] = '#FF0000';
-            }
-          }
-        }
-
-        onEvent(SensorEvent(
-          type:        SensorEventType.on,
-          mode:        mode,
-          sensorId:    sensorId,
-          color:       color,
-          distractors: distractors,
-        ));
     }
   }
 
