@@ -16,10 +16,10 @@ class SensorDefinition {
   final String expectedFoot;
 
   SensorDefinition({
-    required this.id, 
-    required this.x, 
-    required this.y, 
-    required this.sector, 
+    required this.id,
+    required this.x,
+    required this.y,
+    required this.sector,
     required this.expectedFoot
   });
 }
@@ -38,12 +38,12 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   StreamSubscription? _eventSubscription;
   StreamSubscription? _pressureSubscription;
   StreamSubscription? _lineSubscription;
-  
+
   // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
   List<String> executionLog = [];
   final ScrollController _logScrollController = ScrollController();
-  
+
   bool _isSessionStarted = false;
   Stopwatch stopwatch = Stopwatch();
   Timer? _timer;
@@ -116,7 +116,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       }
       _handleBinaryEvent(event);
     });
-    
+
     _pressureSubscription = _bluetoothService.pressureStream.listen((pressures) {
       // Pressure is handled via StreamBuilder in _buildCanvas for zero-allocation performance
     });
@@ -160,8 +160,37 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   void _handleBinaryEvent(SensorEvent event) {
     if (!mounted) return;
-    
+
     switch (event.type) {
+      case SensorEventType.countdown:
+        // Immediate UI update for the first pulse (0x16)
+        setState(() {
+          _isWaitingForSet = false;
+          _countdownValue = event.mode;
+        });
+        _addLog("⏳ Countdown Sync: ${event.mode}");
+        break;
+
+      case SensorEventType.animationStep:
+        if (_countdownValue != event.mode) {
+          setState(() {
+            _countdownValue = event.mode;
+            executionLog.add("[${DateTime.now().toString().split(' ').last.substring(0, 8)}] ⏳ Step: ${event.mode}");
+          });
+          _scrollToBottom();
+        }
+        if (event.mode == 0) {
+          _addLog("🚀 Session GO!");
+          // Briefly show "GO!" then transition
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted && _countdownValue == 0) {
+              setState(() => _countdownValue = -1);
+              _startLocalSessionLogic();
+            }
+          });
+        }
+        break;
+
       case SensorEventType.on:
         setState(() {
           _currentTarget = event.sensorId;
@@ -177,9 +206,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.hit:
-        _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0, 
-          isHit: true, 
-          stimuliStart: event.stimuliStart ?? 0, 
+        _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0,
+          isHit: true,
+          stimuliStart: event.stimuliStart ?? 0,
           stimuliEnd: event.stimuliEnd ?? 0
         );
 
@@ -197,9 +226,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.miss:
-        _recordResult(_currentRound, event.sensorId, 0, 
-          isHit: false, 
-          errType: event.errorType ?? 1, 
+        _recordResult(_currentRound, event.sensorId, 0,
+          isHit: false,
+          errType: event.errorType ?? 1,
           wrongSensorId: event.wrongSensorId ?? 0,
           stimuliStart: event.stimuliStart ?? 0,
           stimuliEnd: event.stimuliEnd ?? 0
@@ -225,7 +254,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     if (color == null) return "ffffff";
     String c = color.toString().toLowerCase();
     if (c.startsWith('#')) return c.replaceAll('#', '');
-    
+
     const map = {
       'green': '00ff00',
       'red': 'ff0000',
@@ -255,10 +284,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _currentTarget = -1;
         _activeDistractors = {};
         formattedTime = "00:00.0";
-        
+
         _targetHitsPerRound = params['target_qty'] ?? 10;
         _correctColor = params['target_rgb_hex'] ?? "#00FF00";
-        
+
         _addLog("➡️ Sending Binary Configuration...");
       });
 
@@ -280,8 +309,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         distMode: params['dist_mode'] ?? 0,
         distQty: params['dist_qty'] ?? 0,
         distBehavior: params['dist_behavior'] ?? 0,
-        distRGBsHex: (params['dist_rgbs_hex'] is List) 
-            ? List<String>.from(params['dist_rgbs_hex']) 
+        distRGBsHex: (params['dist_rgbs_hex'] is List)
+            ? List<String>.from(params['dist_rgbs_hex'])
             : [],
         delayType: params['delay_type'] ?? 1,
         delayMinMs: params['delay_min_ms'] ?? 500,
@@ -289,7 +318,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         timeoutMs: params['timeout_ms'] ?? 0,
         repeatIfWrong: params['repeat_if_wrong'] == true,
       );
-      
+
       _lastSentCommand = "START_BINARY";
     } catch (e) {
       _addLog("❌ Error starting session: $e");
@@ -297,37 +326,31 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     }
   }
 
-  void _onSetConfirmed() async {
+  void _onSetConfirmed() {
     if (!mounted || !_isWaitingForSet) return;
-    
+
     setState(() {
       _isWaitingForSet = false;
-      _countdownValue = 5; // Sync with V1.4.0 5-second visual countdown contract
+      // Anticipate the first pulse by setting 5 immediately upon SET_OK
+      _countdownValue = 5;
     });
 
     _addLog("✔️ Configuration applied. Starting countdown...");
+  }
 
-    Timer.periodic(const Duration(seconds: 1), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      setState(() {
-        if (_countdownValue > 0) {
-          _countdownValue--;
-        } else {
-          _countdownValue = -1; 
-          timer.cancel();
-          _startLocalSessionLogic();
-        }
-      });
-    });
+  void _scrollToBottom() {
+    if (_logScrollController.hasClients) {
+      _logScrollController.animateTo(
+        _logScrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   void _startLocalSessionLogic() {
     _addLog("🚀 Session GO!");
-    
+
     stopwatch.reset();
     stopwatch.start();
     _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
@@ -361,8 +384,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       final params = data['parameters'] ?? {};
 
       final hitsList = _results.where((r) => r.error == 0).toList();
-      double avgRT = hitsList.isEmpty 
-          ? 0 
+      double avgRT = hitsList.isEmpty
+          ? 0
           : hitsList.map((e) => e.reactionTime).reduce((a, b) => a + b) / hitsList.length;
 
       final testData = {
@@ -410,7 +433,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     });
   }
 
-  void _recordResult(int round, int sensorId, int reactionTimeMs, 
+  void _recordResult(int round, int sensorId, int reactionTimeMs,
       {required bool isHit, int errType = 0, int wrongSensorId = 0, int stimuliStart = 0, int stimuliEnd = 0}) {
     final sensorDef = _sensorDefinitions.firstWhere(
       (s) => s.id == sensorId,
@@ -424,7 +447,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       stimulusType: "color",
       correctColor: _correctColor,
       reactionTime: reactionTimeMs,
-      stimulusStart: stimuliStart, 
+      stimulusStart: stimuliStart,
       stimulusEnd: stimuliEnd,
       error: isHit ? 0 : errType, // 1: TIMEOUT, 2: WRONG
       footUsed: sensorDef.expectedFoot,
@@ -493,10 +516,12 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                         child: Center(
                           child: Stack(
                             children: [
-                              _isSessionStarted 
-                                ? _buildCanvas() 
+                              _isSessionStarted
+                                ? _buildCanvas()
                                 : _buildStartOverlay(),
-                              if (_countdownValue >= 0) _buildCountdownOverlay(),
+                              // PRE-WARM: Show overlay immediately when starting, before the first pulse
+                              if (_isSessionStarted && !stopwatch.isRunning && !_isFinished)
+                                _buildCountdownOverlay(),
                             ],
                           ),
                         ),
@@ -518,7 +543,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                     children: [
                       const Padding(
                         padding: EdgeInsets.all(12.0),
-                        child: Text("EXECUTION LOG", 
+                        child: Text("EXECUTION LOG",
                           style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 10)),
                       ),
                       Expanded(
@@ -562,14 +587,29 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
               style: TextStyle(color: Colors.white54, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 4),
             ),
             const SizedBox(height: 20),
-            Text(
-              _countdownValue == 0 ? "GO!" : "$_countdownValue",
-              style: TextStyle(
-                color: _countdownValue == 0 ? Colors.greenAccent : Colors.orange,
-                fontSize: 180,
-                fontWeight: FontWeight.bold,
+            // PRE-WARM: Use Visibility with maintainSize to lock layout in memory
+            Visibility(
+              visible: _countdownValue >= 0,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                _countdownValue == 0 ? "GO!" : "${_countdownValue > 0 ? _countdownValue : 5}",
+                style: TextStyle(
+                  color: _countdownValue == 0 ? Colors.greenAccent : Colors.orange,
+                  fontSize: 180,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
+            // Minimalist indicator to show we are waiting for hardware handshake
+            if (_countdownValue < 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 20),
+                child: Text("WAITING FOR SENSORS...",
+                  style: TextStyle(color: Colors.white.withOpacity(0.2), fontSize: 12, letterSpacing: 2)
+                ),
+              ),
           ],
         ),
       ),
@@ -581,13 +621,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(
-          _isFinished ? Icons.check_circle_outline : Icons.touch_app, 
-          size: 80, 
+          _isFinished ? Icons.check_circle_outline : Icons.touch_app,
+          size: 80,
           color: _isFinished ? Colors.green.withOpacity(0.2) : Colors.white10
         ),
         const SizedBox(height: 20),
         if (_isFinished) ...[
-          const Text("SESSION COMPLETE", 
+          const Text("SESSION COMPLETE",
             style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 2)),
           const SizedBox(height: 10),
           Text("$_hits Hits | $_misses Misses", style: const TextStyle(color: Colors.grey)),
@@ -601,12 +641,12 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
           ),
-          child: Text(_isFinished ? "RESTART SESSION" : "START SESSION", 
+          child: Text(_isFinished ? "RESTART SESSION" : "START SESSION",
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
         ),
         const SizedBox(height: 10),
         Text(
-          _isFinished ? "Data has been saved to the database." : "Ensure the device is connected before starting.", 
+          _isFinished ? "Data has been saved to the database." : "Ensure the device is connected before starting.",
           style: const TextStyle(color: Colors.grey, fontSize: 12)
         ),
       ],
@@ -644,8 +684,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   Widget _buildStatsBar() {
     final hits = _results.where((r) => r.error == 0).length;
-    double avgRT = hits == 0 
-        ? 0 
+    double avgRT = hits == 0
+        ? 0
         : _results.where((r) => r.error == 0).map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
 
     return Container(
@@ -670,7 +710,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     return Column(
       children: [
         Text(value, style: TextStyle(
-          color: isPrimary ? Colors.orange : Colors.white, 
+          color: isPrimary ? Colors.orange : Colors.white,
           fontWeight: FontWeight.bold,
           fontSize: isPrimary ? 20 : 14,
           fontFamily: isPrimary ? 'monospace' : null,
@@ -689,8 +729,8 @@ class MatPainter extends CustomPainter {
   final Map<int, String> distractors;
 
   MatPainter({
-    required this.sensors, 
-    required this.values, 
+    required this.sensors,
+    required this.values,
     required this.currentTarget,
     required this.correctColor,
     required this.distractors,
@@ -700,11 +740,11 @@ class MatPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final double scale = size.shortestSide / 75;
-    
-    final double hexSize = 7.5 * scale; 
-    final double rectWidth = 6.0 * scale; 
-    final double rectHeight = 1.2 * scale; 
-    final double rectOffsetDeltaY = -4.5 * scale; 
+
+    final double hexSize = 7.5 * scale;
+    final double rectWidth = 6.0 * scale;
+    final double rectHeight = 1.2 * scale;
+    final double rectOffsetDeltaY = -4.5 * scale;
 
     // Helper to parse hex color
     Color parseColor(String colorStr, Color fallback) {
@@ -723,12 +763,12 @@ class MatPainter extends CustomPainter {
 
     for (var sensor in sensors) {
       final pos = Offset(center.dx + (sensor.x * scale), center.dy + (sensor.y * scale));
-      
+
       int val = sensor.id <= values.length ? values[sensor.id - 1] : 0;
       bool isPressed = val > 100;
       bool isTarget = sensor.id == currentTarget;
       bool isDistractor = distractors.containsKey(sensor.id);
-      
+
       Color activeColor = targetColor;
       if (isDistractor) {
         activeColor = parseColor(distractors[sensor.id]!, Colors.red);
@@ -742,7 +782,7 @@ class MatPainter extends CustomPainter {
         ..style = PaintingStyle.fill;
 
       final hexOutlinePaint = Paint()
-        ..color = isTarget 
+        ..color = isTarget
             ? Colors.orangeAccent
             : isDistractor
                 ? activeColor.withOpacity(0.5)
@@ -756,11 +796,11 @@ class MatPainter extends CustomPainter {
       final rectPaint = Paint()
         ..color = (isTarget || isDistractor)
             ? activeColor // Brightest when it's the target or distractor
-            : isPressed 
-                ? activeColor.withOpacity(0.8) 
+            : isPressed
+                ? activeColor.withOpacity(0.8)
                 : Colors.white.withOpacity(0.05)
         ..style = PaintingStyle.fill;
-      
+
       final rect = Rect.fromCenter(
         center: Offset(pos.dx, pos.dy + rectOffsetDeltaY),
         width: rectWidth,
@@ -772,7 +812,7 @@ class MatPainter extends CustomPainter {
         final shadowPaint = Paint()
           ..color = activeColor.withOpacity(0.4)
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * scale);
-        
+
         canvas.drawRRect(
           RRect.fromRectAndRadius(
             Rect.fromCenter(
@@ -788,7 +828,7 @@ class MatPainter extends CustomPainter {
 
       // Draw the LED with rounded corners
       canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, Radius.circular(1.0 * scale)), 
+        RRect.fromRectAndRadius(rect, Radius.circular(1.0 * scale)),
         rectPaint
       );
 
@@ -797,8 +837,8 @@ class MatPainter extends CustomPainter {
         text: TextSpan(
           text: '${sensor.id}',
           style: TextStyle(
-            color: isPressed ? Colors.white : Colors.white24, 
-            fontSize: 4.5 * scale, 
+            color: isPressed ? Colors.white : Colors.white24,
+            fontSize: 4.5 * scale,
             fontWeight: FontWeight.bold
           ),
         ),
@@ -811,7 +851,7 @@ class MatPainter extends CustomPainter {
   void _drawHex(Canvas canvas, Offset center, double size, Paint fill, Paint stroke) {
     final path = Path();
     final double roundingDist = size * 0.1; // Reduced to 10% for a "little" rounding
-    
+
     List<Offset> vertices = [];
     for (int i = 0; i < 6; i++) {
       double angle = i * 60 * math.pi / 180;

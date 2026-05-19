@@ -8,7 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-enum SensorEventType { on, hit, miss, end }
+enum SensorEventType { on, hit, miss, end, countdown, animationStep }
 
 class SensorEvent {
   SensorEvent({
@@ -66,6 +66,8 @@ abstract final class _Protocol {
   static const int evtMiss        = 0x12;
   static const int evtEnd         = 0x13;
   static const int evtPressure    = 0x14;
+  static const int evtCountdownStarted = 0x16; // UPDATED: 0x16 per firmware C++
+  static const int evtAnimationStep    = 0x17; // UPDATED: 0x17 per firmware C++
 
   static const int maxBufferBytes  = 64 * 1024;
   static const int initialBufSize  =  8 * 1024;
@@ -176,30 +178,28 @@ class _FrameParser {
       }
 
       if (byte >= 32 && byte <= 126) {
-        int newline = -1;
+        int end = -1;
         for (int i = cursor; i < _len; i++) {
-          if (_buf[i] == 10) { newline = i; break; }
-          if (_buf[i] < 32 || _buf[i] > 126) { newline = i; break; }
+          if (_buf[i] == 10) { end = i; break; }
+          if (_buf[i] < 32 || _buf[i] > 126) { end = i; break; }
         }
 
-        if (newline != -1) {
+        if (end != -1) {
+          final isNewline = _buf[end] == 10;
           try {
             final line = utf8
-                .decode(Uint8List.sublistView(_buf, cursor, newline))
+                .decode(Uint8List.sublistView(_buf, cursor, end))
                 .trim();
             if (line.isNotEmpty) {
               onLine(line);
-              if (line.startsWith('EVT|')) {
-                _handleLegacyEvent(line);
-              } else if (line.startsWith('DATA:')) {
-                _handleLegacyData(line);
-              }
+              if (line.startsWith('EVT|')) _handleLegacyEvent(line);
+              else if (line.startsWith('DATA:')) _handleLegacyData(line);
             }
           } catch (_) { }
-          cursor = newline + 1;
+          cursor = isNewline ? end + 1 : end; // Do NOT consume SOF or other control bytes
           continue;
         } else {
-          break;
+          break; // Wait for more data or a terminator
         }
       }
 
@@ -235,8 +235,22 @@ class _FrameParser {
 
   void _handleBinaryPacket(int cmd, int offset, int len) {
     final data = ByteData.sublistView(_buf, offset, offset + len);
+    // Silent parsing for high-frequency performance
+    // debugPrint('[BLE] Binary Packet: cmd=0x${cmd.toRadixString(16)} len=$len');
 
     switch (cmd) {
+      case _Protocol.evtCountdownStarted:
+        // Payload is 1 byte: The value '5' (initial start)
+        final val = len > 0 ? data.getUint8(0) : 5;
+        onEvent(SensorEvent(type: SensorEventType.countdown, mode: val, sensorId: 0));
+        break;
+
+      case _Protocol.evtAnimationStep:
+        // Payload is 1 byte: The current countdown integer (3, 2, 1, 0)
+        final val = len > 0 ? data.getUint8(0) : 0;
+        onEvent(SensorEvent(type: SensorEventType.animationStep, mode: val, sensorId: 0));
+        break;
+
       case _Protocol.evtPressure:
         if (len >= _Protocol.pressureSensors * 2) {
           for (int i = 0; i < _Protocol.pressureSensors; i++) {
@@ -244,6 +258,7 @@ class _FrameParser {
           }
           onPressure(Int32List.fromList(_pressureCache));
         }
+        break;
 
       case _Protocol.evtOn:
         if (len >= 5) {
@@ -254,6 +269,7 @@ class _FrameParser {
             color: [data.getUint8(2), data.getUint8(3), data.getUint8(4)],
           ));
         }
+        break;
 
       case _Protocol.evtHit:
         if (len >= 4) {
@@ -264,6 +280,7 @@ class _FrameParser {
             reactionTime: data.getUint16(2, Endian.little),
           ));
         }
+        break;
 
       case _Protocol.evtMiss:
         if (len >= 4) {
@@ -275,6 +292,7 @@ class _FrameParser {
             wrongSensorId: data.getUint8(3),
           ));
         }
+        break;
 
       case _Protocol.evtEnd:
         if (len >= 6) {
@@ -287,6 +305,7 @@ class _FrameParser {
             misses:   data.getUint16(4, Endian.little),
           ));
         }
+        break;
     }
   }
 
@@ -457,11 +476,11 @@ class AppBluetoothService {
   String _sensorCount     = 'Unknown';
   static const String _registeredUser = 'Michel De Cesaro';
 
-  final _dataController       = StreamController<List<int>>.broadcast();
+  final _dataController       = StreamController<List<int>>.broadcast(sync: true);
   final _connectionController = StreamController<fbp.BluetoothConnectionState>.broadcast();
   final _lineController       = StreamController<String>.broadcast();
-  final _eventController      = StreamController<SensorEvent>.broadcast();
-  final _pressureController   = StreamController<Int32List>.broadcast();
+  final _eventController      = StreamController<SensorEvent>.broadcast(sync: true);
+  final _pressureController   = StreamController<Int32List>.broadcast(sync: true);
   final Int32List _pressureCache = Int32List(_Protocol.pressureSensors);
 
   Stream<List<int>>                    get dataStream            => _dataController.stream;
@@ -481,7 +500,7 @@ class AppBluetoothService {
 
   late final _FrameParser _parser = _FrameParser(
     onLine: (line) {
-      debugPrint(' firmware -> $line');
+      // debugPrint(' firmware -> $line'); // Reduced log noise in hot-path
       _lineController.add(line);
     },
     onEvent:     _eventController.add,
@@ -569,7 +588,8 @@ class AppBluetoothService {
       // Upgraded to maximum headroom to clear full frames automatically on capable chipsets
       try {
         debugPrint('[BLE] Requesting expanded link layer MTU configuration (512)...');
-        await device.requestMtu(512, timeout: 4);
+        final mtu = await device.requestMtu(512, timeout: 4);
+        debugPrint('[BLE MTU] Negotiated MTU: $mtu bytes');
       } catch (e) {
         debugPrint('[BLE MTU] Request declined or unhandled by OS layer: $e');
       }
@@ -604,7 +624,7 @@ class AppBluetoothService {
           _dataSubscription = char.onValueReceived.listen((bytes) {
             _dataController.add(bytes);
             _parser.feed(bytes);
-            onUpdate?.call();
+            // onUpdate removed from here to prevent UI-thread "Buffer Bloat"
           });
           debugPrint('[BLE] Subscribed to data characteristic: $uuid');
           return;
@@ -790,13 +810,11 @@ class AppBluetoothService {
         // we introduce a tiny pause. This feeds the firmware's serial buffer fast enough to satisfy
         // the 100ms hardware timeout gate while keeping the stack stable.
         if (offset < frame.length) {
-          await Future.delayed(const Duration(milliseconds: 8));
+          // Reduced delay to keep the pipeline full without choking the pod's RX buffer
+          await Future.delayed(const Duration(milliseconds: 1));
         }
       }
-
-      // Final trailing hardware settling time window
-      await Future.delayed(const Duration(milliseconds: 15));
-
+      // Trailing 15ms settling delay removed for V1.4.0 high-speed sync
     } catch (e) {
       debugPrint('[BLE] _sendBinaryPacket exception on CMD 0x${cmd.toRadixString(16).toUpperCase()}: $e');
     }
