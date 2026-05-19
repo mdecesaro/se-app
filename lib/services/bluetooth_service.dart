@@ -104,11 +104,16 @@ class _FrameParser {
   Uint8List _buf = Uint8List(_Protocol.initialBufSize);
   int       _len = 0;
 
-  final Int32List _pressureCache = Int32List(_Protocol.pressureSensors);
+  // Pool of buffers to avoid GC pressure while ensuring shouldRepaint sees reference changes
+  final List<Int32List> _pPool = List.generate(8, (_) => Int32List(_Protocol.pressureSensors));
+  int _pIdx = 0;
 
   void reset() {
     _len = 0;
-    _pressureCache.fillRange(0, _Protocol.pressureSensors, 0);
+    for (final b in _pPool) {
+      b.fillRange(0, _Protocol.pressureSensors, 0);
+    }
+    _pIdx = 0;
   }
 
   void feed(List<int> bytes) {
@@ -257,10 +262,12 @@ class _FrameParser {
 
       case _Protocol.evtPressure:
         if (len >= _Protocol.pressureSensors * 2) {
+          final buf = _pPool[_pIdx];
+          _pIdx = (_pIdx + 1) % _pPool.length;
           for (int i = 0; i < _Protocol.pressureSensors; i++) {
-            _pressureCache[i] = data.getUint16(i * 2, Endian.little);
+            buf[i] = data.getUint16(i * 2, Endian.little);
           }
-          onPressure(Int32List.fromList(_pressureCache));
+          onPressure(buf);
         }
         break;
 
@@ -397,7 +404,7 @@ class AppBluetoothService {
   final _lineController       = StreamController<String>.broadcast();
   final _eventController      = StreamController<SensorEvent>.broadcast(sync: true);
   final _pressureController   = StreamController<Int32List>.broadcast(sync: true);
-  final Int32List _pressureCache = Int32List(_Protocol.pressureSensors);
+  Int32List _pressureCache    = Int32List(_Protocol.pressureSensors);
 
   Stream<List<int>>                    get dataStream            => _dataController.stream;
   Stream<fbp.BluetoothConnectionState> get connectionStateStream => _connectionController.stream;
@@ -421,7 +428,7 @@ class AppBluetoothService {
     },
     onEvent:     _eventController.add,
     onPressure:  (data) {
-      _pressureCache.setAll(0, data);
+      _pressureCache = data;
       _pressureController.add(data);
     },
     onHandshake: _applyHandshakeResult,
@@ -585,8 +592,8 @@ class AppBluetoothService {
     _sensorCount = 'Unknown';
     _parser.reset();
 
-    _pressureCache.fillRange(0, _pressureCache.length, 0);
-    _pressureController.add(Int32List(_Protocol.pressureSensors));
+    _pressureCache = Int32List(_Protocol.pressureSensors);
+    _pressureController.add(_pressureCache);
     _eventController.add(SensorEvent(
       type: SensorEventType.end, sensorId: 0, mode: 0,
       totalMs: 0, hits: 0, misses: 0,
