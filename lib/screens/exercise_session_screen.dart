@@ -36,7 +36,6 @@ class ExerciseSessionScreen extends StatefulWidget {
 class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   final AppBluetoothService _bluetoothService = AppBluetoothService();
   StreamSubscription? _eventSubscription;
-  StreamSubscription? _pressureSubscription;
 
   // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
@@ -61,7 +60,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   List<EvaluationResult> _results = [];
   bool _isFinished = false;
   bool _isWaitingForSet = false;
-  String _lastSentCommand = "";
   int _countdownValue = -1; // -1 means no countdown
   String? _athleteName;
   int? _athleteId;
@@ -104,7 +102,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   void _setupDataListener() {
     _eventSubscription?.cancel();
-    _pressureSubscription?.cancel();
 
     _eventSubscription = _bluetoothService.eventStream.listen((event) {
       if (event.type == SensorEventType.end && event.totalMs == 0) {
@@ -113,10 +110,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         return;
       }
       _handleBinaryEvent(event);
-    });
-
-    _pressureSubscription = _bluetoothService.pressureStream.listen((pressures) {
-      // Pressure is handled via StreamBuilder in _buildCanvas for zero-allocation performance
     });
   }
 
@@ -173,11 +166,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         }
         if (event.mode == 0) {
           _addLog("🚀 Session GO!");
+          _startLocalSessionLogic();
           // Briefly show "GO!" then transition
           Future.delayed(const Duration(milliseconds: 300), () {
             if (mounted && _countdownValue == 0) {
               setState(() => _countdownValue = -1);
-              _startLocalSessionLogic();
             }
           });
         }
@@ -298,8 +291,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         timeoutMs: params['timeout_ms'] ?? 0,
         repeatIfWrong: params['repeat_if_wrong'] == true,
       );
-
-      _lastSentCommand = "START";
     } catch (e) {
       _addLog("❌ Error starting session: $e");
       setState(() => _isSessionStarted = false);
@@ -329,8 +320,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   void _startLocalSessionLogic() {
-    _addLog("🚀 Session GO!");
-
+    if (stopwatch.isRunning) return;
     stopwatch.reset();
     stopwatch.start();
     _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
@@ -442,7 +432,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   void dispose() {
     _timer?.cancel();
     _eventSubscription?.cancel();
-    _pressureSubscription?.cancel();
     _logScrollController.dispose();
     if (_isSessionStarted) {
       _bluetoothService.sendStopGame();
@@ -861,5 +850,11 @@ class MatPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant MatPainter oldDelegate) => true;
+  bool shouldRepaint(covariant MatPainter oldDelegate) {
+    return oldDelegate.currentTarget != currentTarget ||
+           oldDelegate.correctColor != correctColor ||
+           oldDelegate.values != values ||
+           oldDelegate.distractors != distractors ||
+           oldDelegate.sensors != sensors;
+  }
 }
