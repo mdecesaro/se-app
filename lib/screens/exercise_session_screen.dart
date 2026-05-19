@@ -39,8 +39,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
-  List<String> executionLog = [];
+  final List<String> executionLog = [];
   final ScrollController _logScrollController = ScrollController();
+  final ValueNotifier<int> _logNotifier = ValueNotifier<int>(0);
 
   bool _isSessionStarted = false;
   Stopwatch stopwatch = Stopwatch();
@@ -160,9 +161,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         if (_countdownValue != event.mode) {
           setState(() {
             _countdownValue = event.mode;
-            executionLog.add("[${DateTime.now().toString().split(' ').last.substring(0, 8)}] ⏳ Step: ${event.mode}");
           });
-          _scrollToBottom();
+          _addLog("⏳ Step: ${event.mode}");
         }
         if (event.mode == 0) {
           _addLog("🚀 Session GO!");
@@ -309,16 +309,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     _addLog("✔️ Configuration applied. Starting countdown...");
   }
 
-  void _scrollToBottom() {
-    if (_logScrollController.hasClients) {
-      _logScrollController.animateTo(
-        _logScrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
-      );
-    }
-  }
-
   void _startLocalSessionLogic() {
     if (stopwatch.isRunning) return;
     stopwatch.reset();
@@ -388,9 +378,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   void _addLog(String message) {
     if (!mounted) return;
-    setState(() {
-      executionLog.add("[${DateTime.now().toString().split(' ').last.substring(0, 8)}] $message");
-    });
+    executionLog.add("[${DateTime.now().toString().split(' ').last.substring(0, 8)}] $message");
+    _logNotifier.value++;
     // Auto-scroll log
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_logScrollController.hasClients) {
@@ -433,6 +422,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     _timer?.cancel();
     _eventSubscription?.cancel();
     _logScrollController.dispose();
+    _logNotifier.dispose();
     if (_isSessionStarted) {
       _bluetoothService.sendStopGame();
     }
@@ -515,17 +505,22 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                           style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 10)),
                       ),
                       Expanded(
-                        child: ListView.builder(
-                          controller: _logScrollController,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          itemCount: executionLog.length,
-                          itemBuilder: (context, index) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 4.0),
-                              child: Text(
-                                executionLog[index],
-                                style: const TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace'),
-                              ),
+                        child: ValueListenableBuilder<int>(
+                          valueListenable: _logNotifier,
+                          builder: (context, _, __) {
+                            return ListView.builder(
+                              controller: _logScrollController,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              itemCount: executionLog.length,
+                              itemBuilder: (context, index) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 4.0),
+                                  child: Text(
+                                    executionLog[index],
+                                    style: const TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace'),
+                                  ),
+                                );
+                              },
                             );
                           },
                         ),
