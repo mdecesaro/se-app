@@ -174,7 +174,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         if (event.mode == 0) {
           _addLog("🚀 Session GO!");
           // Briefly show "GO!" then transition
-          Future.delayed(const Duration(milliseconds: 600), () {
+          Future.delayed(const Duration(milliseconds: 300), () {
             if (mounted && _countdownValue == 0) {
               setState(() => _countdownValue = -1);
               _startLocalSessionLogic();
