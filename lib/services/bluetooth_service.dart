@@ -191,7 +191,8 @@ class _FrameParser {
         continue;
       }
 
-      if (byte >= 32 && byte <= 126) {
+      // Speculative ASCII parsing (Gated for production performance)
+      if (kDebugMode && byte >= 32 && byte <= 126) {
         int end = -1;
         for (int i = cursor; i < _len; i++) {
           if (_buf[i] == 10) { end = i; break; }
