@@ -103,6 +103,7 @@ class _FrameParser {
 
   Uint8List _buf = Uint8List(_Protocol.initialBufSize);
   int       _len = 0;
+  bool _handshakeDone = false;
 
   // Pool of buffers to avoid GC pressure while ensuring shouldRepaint sees reference changes
   final List<Int32List> _pPool = List.generate(8, (_) => Int32List(_Protocol.pressureSensors));
@@ -114,6 +115,7 @@ class _FrameParser {
       b.fillRange(0, _Protocol.pressureSensors, 0);
     }
     _pIdx = 0;
+    _handshakeDone = false;
   }
 
   void feed(List<int> bytes) {
@@ -147,10 +149,11 @@ class _FrameParser {
 
       if (byte == _Protocol.msgAck || byte == _Protocol.msgNack) {
         final bool isAck = (byte == _Protocol.msgAck);
-        if (isAck) {
+        if (isAck && !_handshakeDone) {
           final result = _tryParseHandshake(cursor);
 
           if (result is _HandshakeSuccess) {
+            _handshakeDone = true;
             cursor += result.consumed;
             continue;
           }
