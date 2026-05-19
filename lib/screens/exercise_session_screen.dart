@@ -163,16 +163,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             _countdownValue = event.mode;
           });
           _addLog("⏳ Step: ${event.mode}");
-        }
-        if (event.mode == 0) {
-          _addLog("🚀 Session GO!");
-          _startLocalSessionLogic();
-          // Briefly show "GO!" then transition
-          Future.delayed(const Duration(milliseconds: 300), () {
-            if (mounted && _countdownValue == 0) {
-              setState(() => _countdownValue = -1);
-            }
-          });
+
+          if (event.mode == 0) {
+            _addLog("🚀 Session GO!");
+            _startLocalSessionLogic();
+            // Briefly show "GO!" then transition
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (mounted && _countdownValue == 0) {
+                setState(() => _countdownValue = -1);
+              }
+            });
+          }
         }
         break;
 
@@ -380,8 +381,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     if (!mounted) return;
     executionLog.add("[${DateTime.now().toString().split(' ').last.substring(0, 8)}] $message");
     _logNotifier.value++;
-    // Auto-scroll log
-    Future.delayed(const Duration(milliseconds: 100), () {
+    // Auto-scroll log - Use WidgetsBinding to wait for next frame instead of artificial 100ms
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
           _logScrollController.position.maxScrollExtent,
