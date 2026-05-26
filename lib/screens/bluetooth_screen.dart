@@ -182,7 +182,16 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: const TextStyle(color: Colors.white54)),
-          Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
         ],
       ),
     );
@@ -209,12 +218,18 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                         borderRadius: BorderRadius.circular(15),
                       ),
                       child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                         title: Text(
                           r.device.platformName.isEmpty ? "Unknown FlyFeet" : r.device.platformName,
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
                         ),
-                        subtitle: Text(r.device.remoteId.str, style: const TextStyle(color: Colors.white24, fontSize: 10)),
-                        trailing: _isConnecting 
+                        subtitle: Text(
+                          r.device.remoteId.str,
+                          style: const TextStyle(color: Colors.white24, fontSize: 10, fontFamily: 'monospace'),
+                        ),
+                        trailing: _isConnecting
                           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                           : FilledButton(
                               onPressed: () async {

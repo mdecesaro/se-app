@@ -457,32 +457,43 @@ class AppBluetoothService {
   }
 
   Future<void> startScan({VoidCallback? onUpdate}) async {
-    await [
-      Permission.location,
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-    ].request();
+    try {
+      if (await fbp.FlutterBluePlus.adapterState.first != fbp.BluetoothAdapterState.on) {
+        debugPrint('[BLE] Cannot start scan: Bluetooth adapter is not ON.');
+        return;
+      }
 
-    _scanResults.clear();
-    _isScanning = true;
-    onUpdate?.call();
+      await [
+        Permission.location,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
 
-    final sub = fbp.FlutterBluePlus.onScanResults.listen((results) {
-      _scanResults
-        ..clear()
-        ..addAll(results.where((r) {
-          final name = (r.advertisementData.advName + r.device.platformName).toLowerCase();
-          return name.contains('flyfeet') || name.contains('bluno') || name.contains('dfrobot');
-        }));
+      _scanResults.clear();
+      _isScanning = true;
       onUpdate?.call();
-    });
 
-    await fbp.FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-    await fbp.FlutterBluePlus.isScanning.where((v) => !v).first;
+      final sub = fbp.FlutterBluePlus.onScanResults.listen((results) {
+        _scanResults
+          ..clear()
+          ..addAll(results.where((r) {
+            final name = (r.advertisementData.advName + r.device.platformName).toLowerCase();
+            return name.contains('flyfeet') || name.contains('bluno') || name.contains('dfrobot');
+          }));
+        onUpdate?.call();
+      });
 
-    _isScanning = false;
-    await sub.cancel();
-    onUpdate?.call();
+      await fbp.FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+      await fbp.FlutterBluePlus.isScanning.where((v) => !v).first;
+
+      _isScanning = false;
+      await sub.cancel();
+      onUpdate?.call();
+    } catch (e) {
+      debugPrint('[BLE] startScan error: $e');
+      _isScanning = false;
+      onUpdate?.call();
+    }
   }
 
   Future<void> connect(fbp.BluetoothDevice device, {VoidCallback? onUpdate}) async {
