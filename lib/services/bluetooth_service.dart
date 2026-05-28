@@ -247,9 +247,18 @@ class _FrameParser {
   }
 
   void _handleBinaryPacket(int cmd, int offset, int len) {
+    // Print every binary frame in hex
+    final fullFrame = Uint8List.sublistView(_buf, offset - 3, offset + len + 1);
+    final hex = fullFrame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
+
+    String label = 'CMD_0x${cmd.toRadixString(16).toUpperCase()}';
+    if (cmd == 0x10) label = 'EVT_SENSOR_ON';
+    else if (cmd == 0x11) label = 'EVT_SENSOR_HIT';
+    else if (cmd == 0x12) label = 'EVT_SENSOR_MISS';
+
+    debugPrint('[FW RX] $label | $hex');
+
     final data = ByteData.sublistView(_buf, offset, offset + len);
-    // Silent parsing for high-frequency performance
-    // debugPrint('[BLE] Binary Packet: cmd=0x${cmd.toRadixString(16)} len=$len');
 
     switch (cmd) {
       case _Protocol.evtCountdownStarted:
@@ -399,7 +408,7 @@ class AppBluetoothService {
   StreamSubscription?          _connectionSubscription;
 
   String _firmwareVersion = 'Checking...';
-  String _deviceType      = 'FlyFeet - Hexon';
+  String _deviceType      = 'FlyFeet-Hexon';
   String _sensorCount     = 'Unknown';
   static const String _registeredUser = 'Michel De Cesaro';
 
@@ -458,15 +467,23 @@ class AppBluetoothService {
 
   Future<void> startScan({VoidCallback? onUpdate}) async {
     try {
-      if (await fbp.FlutterBluePlus.adapterState.first != fbp.BluetoothAdapterState.on) {
+      // 1. Wait for Bluetooth adapter to be ready (up to 2 seconds)
+      try {
+        await fbp.FlutterBluePlus.adapterState
+            .where((s) => s == fbp.BluetoothAdapterState.on)
+            .first
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {
         debugPrint('[BLE] Cannot start scan: Bluetooth adapter is not ON.');
         return;
       }
 
+      // 2. Request all necessary permissions
       await [
         Permission.location,
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
+        Permission.bluetoothAdvertise,
       ].request();
 
       _scanResults.clear();
@@ -478,7 +495,17 @@ class AppBluetoothService {
           ..clear()
           ..addAll(results.where((r) {
             final name = (r.advertisementData.advName + r.device.platformName).toLowerCase();
-            return name.contains('flyfeet') || name.contains('bluno') || name.contains('dfrobot');
+            // Broader filter to catch "FlyFeet-Hexon", "Fly Feet", "Hexon", etc.
+            final isMatch = name.contains('fly') || 
+                            name.contains('feet') || 
+                            name.contains('hexon') || 
+                            name.contains('bluno') || 
+                            name.contains('dfrobot');
+            
+            if (isMatch && name.isNotEmpty) {
+              debugPrint('[BLE] Match found: $name');
+            }
+            return isMatch;
           }));
         onUpdate?.call();
       });
@@ -497,6 +524,13 @@ class AppBluetoothService {
   }
 
   Future<void> connect(fbp.BluetoothDevice device, {VoidCallback? onUpdate}) async {
+    await [
+      Permission.location,
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.bluetoothAdvertise,
+    ].request();
+
     if (_isConnecting) return;
     if (_connectedDevice?.remoteId == device.remoteId && _writeCharacteristic != null) {
       debugPrint('[BLE] Already connected to ${device.remoteId}.');
