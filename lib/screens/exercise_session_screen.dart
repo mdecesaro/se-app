@@ -204,7 +204,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.hit:
-      // O event.sensorId vindo do parser já está humanizado (1 a 14) casado com o sensor.id do banco
         _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0,
             isHit: true,
             stimuliStart: event.stimuliStart ?? 0,
@@ -213,15 +212,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
         setState(() {
           _hits++;
-          _hitsInRound++;
-          if (_hitsInRound >= _targetHitsPerRound) {
-            _currentRound++;
-            _hitsInRound = 0;
-          }
-          // Remove o alvo específico que tomou o hit do grid ativo
-          _activeTargets.remove(event.sensorId);
+          _currentRound++; // Avança a rodada já que um único acerto finaliza a leva
+          _hitsInRound = 0;
+
+          _activeTargets.clear();
           _activeDistractors = {};
         });
+
         _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
         break;
 
