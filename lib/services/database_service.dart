@@ -23,7 +23,7 @@ class DatabaseService {
     String path = join(await getDatabasesPath(), 'flyfeet_v20.db');
     final db = await openDatabase(
       path,
-      version: 21, 
+      version: 22, 
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -60,6 +60,7 @@ class DatabaseService {
     if (oldVersion < 19) await _upgradeToV19(db);
     if (oldVersion < 20) await _upgradeToV20(db);
     if (oldVersion < 21) await _upgradeToV21(db);
+    if (oldVersion < 22) await _upgradeToV22(db);
 
     await _seedDatabase(db);
   }
@@ -220,6 +221,11 @@ class DatabaseService {
     await db.execute('''
         CREATE INDEX IF NOT EXISTS idx_eval_test_results_test_id
         ON evaluation_test_results (test_id)
+    ''');
+
+    await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_eval_tests_session_guid
+        ON evaluation_tests (session_guid)
     ''');
   }
 
@@ -518,6 +524,12 @@ class DatabaseService {
     ''');
   }
 
+  Future<void> _upgradeToV22(Database db) async {
+    // Schema V22: Add session_guid for atomic transaction tracking and integrity
+    await db.execute('ALTER TABLE evaluation_tests ADD COLUMN session_guid TEXT');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_eval_tests_session_guid ON evaluation_tests (session_guid)');
+  }
+
   Future<void> _createTables(Database db) async {
     await db.execute('''
       CREATE TABLE athletes (
@@ -562,7 +574,7 @@ class DatabaseService {
     await _upgradeToV3(db); // sensors
     await _upgradeToV4(db); // movement_ranges
     
-    // Evaluation tables (V21 state - timestamp as INTEGER)
+    // Evaluation tables (V22 state - session_guid added)
     await db.execute('''
         CREATE TABLE evaluation_tests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -571,6 +583,7 @@ class DatabaseService {
             device_id TEXT,
             platform_version TEXT,
             timestamp INTEGER,
+            session_guid TEXT,
             stimuli_count INTEGER,
             delay_type TEXT,
             delay_min_ms INTEGER,
@@ -612,6 +625,11 @@ class DatabaseService {
     await db.execute('''
         CREATE INDEX IF NOT EXISTS idx_eval_test_results_test_id
         ON evaluation_test_results (test_id)
+    ''');
+
+    await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_eval_tests_session_guid
+        ON evaluation_tests (session_guid)
     ''');
   }
 

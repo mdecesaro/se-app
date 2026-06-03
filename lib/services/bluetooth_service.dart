@@ -8,7 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-enum SensorEventType { on, hit, miss, end, countdown, animationStep, ack, nack }
+enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, ack, nack }
 
 class SensorEvent {
   SensorEvent({
@@ -61,13 +61,14 @@ abstract final class _Protocol {
   static const int msgNack        = 0x15;
 
   // Event codes (device → host)
-  static const int evtOn          = 0x10;
-  static const int evtHit         = 0x11;
-  static const int evtMiss        = 0x12;
-  static const int evtEnd         = 0x13;
-  static const int evtPressure    = 0x14;
-  static const int evtCountdownStarted = 0x16; // UPDATED: 0x16 per firmware C++
-  static const int evtAnimationStep    = 0x17; // UPDATED: 0x17 per firmware C++
+  static const int evtOn               = 0x10;
+  static const int evtHit              = 0x11;
+  static const int evtMiss             = 0x12;
+  static const int evtEnd              = 0x13;
+  static const int evtPressure         = 0x14;
+  static const int evtCountdownStarted = 0x16;
+  static const int evtAnimationStep    = 0x17;
+  static const int evtCountdownEnded   = 0x18;
 
   static const int maxBufferBytes  = 64 * 1024;
   static const int initialBufSize  =  8 * 1024;
@@ -103,33 +104,56 @@ class _FrameParser {
 
   Uint8List _buf = Uint8List(_Protocol.initialBufSize);
   int       _len = 0;
-  bool _handshakeDone = false;
+  bool      _handshakeDone = false;
+
+  // FIX 1 — Reentrance guard: prevents concurrent feed() calls from
+  // corrupting _buf/_len when sync StreamControllers fire callbacks
+  // mid-parse (e.g. EVT_HIT listener triggering another feed() call).
+  bool            _parsing   = false;
+  final List<List<int>> _feedQueue = [];
 
   // Pool of buffers to avoid GC pressure while ensuring shouldRepaint sees reference changes
   final List<Int32List> _pPool = List.generate(8, (_) => Int32List(_Protocol.pressureSensors));
   int _pIdx = 0;
 
   void reset() {
-    _len = 0;
+    _len       = 0;
+    _parsing   = false;
+    _feedQueue.clear();
     for (final b in _pPool) {
       b.fillRange(0, _Protocol.pressureSensors, 0);
     }
-    _pIdx = 0;
+    _pIdx         = 0;
     _handshakeDone = false;
   }
 
+  // FIX 1 — Queue-draining feed() replaces direct buffer manipulation.
+  // If a listener callback calls feed() while _parse() is running, the
+  // new bytes are enqueued and processed after the current _parse() returns,
+  // keeping _buf/_len consistent at all times.
   void feed(List<int> bytes) {
     if (bytes.isEmpty) return;
 
-    if (_len + bytes.length > _Protocol.maxBufferBytes) {
-      debugPrint('[FrameParser] Buffer overflow guard — flushing ${_len}B.');
-      _len = 0;
+    _feedQueue.add(List<int>.of(bytes));
+
+    if (_parsing) return; // already inside the drain loop — just enqueue
+    _parsing = true;
+
+    while (_feedQueue.isNotEmpty) {
+      final next = _feedQueue.removeAt(0);
+
+      if (_len + next.length > _Protocol.maxBufferBytes) {
+        debugPrint('[FrameParser] Buffer overflow guard — flushing ${_len}B.');
+        _len = 0;
+      }
+
+      _ensureCapacity(next.length);
+      _buf.setRange(_len, _len + next.length, next);
+      _len += next.length;
+      _parse();
     }
 
-    _ensureCapacity(bytes.length);
-    _buf.setRange(_len, _len + bytes.length, bytes);
-    _len += bytes.length;
-    _parse();
+    _parsing = false;
   }
 
   void _ensureCapacity(int extra) {
@@ -208,7 +232,7 @@ class _FrameParser {
             if (line.isNotEmpty) {
               onLine(line);
             }
-          } catch (_) { }
+          } catch (_) {}
           cursor = isNewline ? end + 1 : end;
           continue;
         } else {
@@ -255,6 +279,9 @@ class _FrameParser {
     if (cmd == 0x10) label = 'EVT_SENSOR_ON';
     else if (cmd == 0x11) label = 'EVT_SENSOR_HIT';
     else if (cmd == 0x12) label = 'EVT_SENSOR_MISS';
+    else if (cmd == 0x16) label = 'EVT_COUNTDOWN_START';
+    else if (cmd == 0x17) label = 'EVT_COUNTDOWN_STEP';
+    else if (cmd == 0x18) label = 'EVT_COUNTDOWN_ENDED';
 
     debugPrint('[FW RX] $label | $hex');
 
@@ -262,15 +289,19 @@ class _FrameParser {
 
     switch (cmd) {
       case _Protocol.evtCountdownStarted:
-        // Payload is 1 byte: The value '5' (initial start)
+      // Payload is 1 byte: The value '5' (initial start)
         final val = len > 0 ? data.getUint8(0) : 5;
         onEvent(SensorEvent(type: SensorEventType.countdown, mode: val, sensorId: 0));
         break;
 
       case _Protocol.evtAnimationStep:
-        // Payload is 1 byte: The current countdown integer (3, 2, 1, 0)
+      // Payload is 1 byte: The current countdown integer (3, 2, 1, 0)
         final val = len > 0 ? data.getUint8(0) : 0;
         onEvent(SensorEvent(type: SensorEventType.animationStep, mode: val, sensorId: 0));
+        break;
+
+      case _Protocol.evtCountdownEnded:
+        onEvent(SensorEvent(type: SensorEventType.countdownEnded, mode: 0, sensorId: 0));
         break;
 
       case _Protocol.evtPressure:
@@ -286,34 +317,89 @@ class _FrameParser {
 
       case _Protocol.evtOn:
         if (len >= 5) {
+          final int targetQty = data.getUint8(0);
+          final int r = data.getUint8(1);
+          final int g = data.getUint8(2);
+          final int b = data.getUint8(3);
+
+          int cursor = 4;
+          final List<int> targetPods = [];
+          for (int i = 0; i < targetQty; i++) {
+            if (cursor < len) {
+              // Read the raw 0-indexed firmware ID (e.g., 9)
+              final int rawPodId = data.getUint8(cursor++);
+              // Convert it to a 1-indexed human display ID (9 + 1 = 10)
+              targetPods.add(rawPodId + 1);
+            }
+          }
+
+          int distQty = 0;
+          if (cursor < len) {
+            distQty = data.getUint8(cursor++);
+          }
+
+          final Map<int, String> distractorsMap = {};
+          for (int i = 0; i < distQty; i++) {
+            if (cursor + 3 < len) {
+              final int dRawPodId = data.getUint8(cursor++);
+              final int dR = data.getUint8(cursor++);
+              final int dG = data.getUint8(cursor++);
+              final int dB = data.getUint8(cursor++);
+
+              final String hexColor = '#${dR.toRadixString(16).padLeft(2, '0')}'
+                  '${dG.toRadixString(16).padLeft(2, '0')}'
+                  '${dB.toRadixString(16).padLeft(2, '0')}';
+              // Convert distractor pod IDs to 1-indexed human numbers as well
+              distractorsMap[dRawPodId + 1] = hexColor.toUpperCase();
+            }
+          }
+
           onEvent(SensorEvent(
-            type:     SensorEventType.on,
-            mode:     data.getUint8(0),
-            sensorId: data.getUint8(1),
-            color: [data.getUint8(2), data.getUint8(3), data.getUint8(4)],
+            type:        SensorEventType.on,
+            mode:        targetQty,
+            sensorId:    targetPods.isNotEmpty ? targetPods.first : 0,
+            color:       [r, g, b, ...targetPods],
+            distractors: distractorsMap,
           ));
         }
         break;
 
       case _Protocol.evtHit:
-        if (len >= 4) {
+        if (len >= 13) {
+          // Read the raw 0-indexed firmware hit value (9)
+          final int rawClearedPodId = data.getUint8(0);
+
+          final int rt      = data.getUint32(1, Endian.big);
+          final int startTS = data.getUint32(5, Endian.big);
+          final int endTS   = data.getUint32(9, Endian.big);
+
           onEvent(SensorEvent(
             type:         SensorEventType.hit,
-            mode:         data.getUint8(0),
-            sensorId:     data.getUint8(1),
-            reactionTime: data.getUint16(2, Endian.little),
+            mode:         0,
+            sensorId:     rawClearedPodId + 1, // Converts 9 to 10 for UI layout parity
+            reactionTime: rt,
+            stimuliStart: startTS,
+            stimuliEnd:   endTS,
           ));
         }
         break;
 
       case _Protocol.evtMiss:
-        if (len >= 4) {
+        if (len >= 9) {
+          // Byte 0 is the mis-tapped pod ID, or 0 if a timeout occurred
+          final int faultPodId = data.getUint8(0);
+
+          final int startTS = data.getUint32(1, Endian.big);
+          final int endTS   = data.getUint32(5, Endian.big);
+
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
-            mode:          data.getUint8(0),
-            sensorId:      data.getUint8(1),
-            errorType:     data.getUint8(2),
-            wrongSensorId: data.getUint8(3),
+            mode:          0,
+            sensorId:      faultPodId,
+            errorType:     faultPodId == 0 ? 2 : 1, // 2 = Timeout, 1 = Mis-tap
+            wrongSensorId: faultPodId,
+            stimuliStart:  startTS,
+            stimuliEnd:    endTS,
           ));
         }
         break;
@@ -359,7 +445,7 @@ class _FrameParser {
       if (pos >= _len) return _HandshakeFragment();
       final podCount = _buf[pos++];
 
-      final version  = readStr();
+      final version = readStr();
       if (version == null) return _HandshakeFragment();
 
       final readyMsg = readStr();
@@ -412,11 +498,16 @@ class AppBluetoothService {
   String _sensorCount     = 'Unknown';
   static const String _registeredUser = 'Michel De Cesaro';
 
-  final _dataController       = StreamController<List<int>>.broadcast(sync: true);
+  // FIX 2 — Removed sync: true from _eventController and _dataController.
+  // sync: true causes add() to propagate in the same microtask as the caller,
+  // which means a listener can call feed() again before _parse() has returned,
+  // corrupting the internal buffer state. Async broadcast streams deliver
+  // events in the next microtask, after _parse() has fully completed.
+  final _dataController       = StreamController<List<int>>.broadcast();
   final _connectionController = StreamController<fbp.BluetoothConnectionState>.broadcast();
   final _lineController       = StreamController<String>.broadcast();
-  final _eventController      = StreamController<SensorEvent>.broadcast(sync: true);
-  final _pressureController   = StreamController<Int32List>.broadcast(sync: true);
+  final _eventController      = StreamController<SensorEvent>.broadcast();
+  final _pressureController   = StreamController<Int32List>.broadcast(sync: true); // pressure is hot-path, safe to keep sync
   Int32List _pressureCache    = Int32List(_Protocol.pressureSensors);
 
   Stream<List<int>>                    get dataStream            => _dataController.stream;
@@ -436,11 +527,10 @@ class AppBluetoothService {
 
   late final _FrameParser _parser = _FrameParser(
     onLine: (line) {
-      // debugPrint(' firmware -> $line'); // Reduced log noise in hot-path
       _lineController.add(line);
     },
-    onEvent:     _eventController.add,
-    onPressure:  (data) {
+    onEvent:    _eventController.add,
+    onPressure: (data) {
       _pressureCache = data;
       _pressureController.add(data);
     },
@@ -495,13 +585,11 @@ class AppBluetoothService {
           ..clear()
           ..addAll(results.where((r) {
             final name = (r.advertisementData.advName + r.device.platformName).toLowerCase();
-            // Broader filter to catch "FlyFeet-Hexon", "Fly Feet", "Hexon", etc.
-            final isMatch = name.contains('fly') || 
-                            name.contains('feet') || 
-                            name.contains('hexon') || 
-                            name.contains('bluno') || 
-                            name.contains('dfrobot');
-            
+            final isMatch = name.contains('fly') ||
+                name.contains('feet') ||
+                name.contains('hexon') ||
+                name.contains('bluno') ||
+                name.contains('dfrobot');
             if (isMatch && name.isNotEmpty) {
               debugPrint('[BLE] Match found: $name');
             }
@@ -557,7 +645,6 @@ class AppBluetoothService {
 
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
-      // Upgraded to maximum headroom to clear full frames automatically on capable chipsets
       try {
         debugPrint('[BLE] Requesting expanded link layer MTU configuration (512)...');
         final mtu = await device.requestMtu(512, timeout: 4);
@@ -593,10 +680,13 @@ class AppBluetoothService {
         if (char.properties.notify || char.properties.indicate) {
           await char.setNotifyValue(true);
           await _dataSubscription?.cancel();
+
+          // FIX 3 — parser.feed() runs first, then _dataController.add().
+          // This ensures the buffer is fully drained before any downstream
+          // listener (which may call into the service) receives the event.
           _dataSubscription = char.onValueReceived.listen((bytes) {
-            _dataController.add(bytes);
             _parser.feed(bytes);
-            // onUpdate removed from here to prevent UI-thread "Buffer Bloat"
+            _dataController.add(bytes);
           });
           debugPrint('[BLE] Subscribed to data characteristic: $uuid');
           return;
@@ -690,18 +780,18 @@ class AppBluetoothService {
     // [Bytes 8-10]: Distractor Matrix Parameters
     payload.setUint8(8,  distMode);
     payload.setUint8(9,  distQty);
-    payload.setUint8(10, distBehavior); // Explicitly maps byte 10 to protect spacing
+    payload.setUint8(10, distBehavior);
 
     // [Bytes 11-19]: Distractor Color Matrix (Normalized to 3 slots x 3 bytes = 9 bytes total)
     // If JSON provides fewer than 3 distractors, remaining registers are safely padded with 0x00
     for (int i = 0; i < 3; i++) {
       final String currentHex = (i < distRGBsHex.length) ? distRGBsHex[i] : '#000000';
-      final List<int> dGRB = _FrameParser._hexToGrb(currentHex);
+      final List<int> dRGB = _FrameParser._hexToRgb(currentHex);
       final int baseOffset = 11 + (i * 3);
 
-      payload.setUint8(baseOffset,     dGRB[0]); // G
-      payload.setUint8(baseOffset + 1, dGRB[1]); // R
-      payload.setUint8(baseOffset + 2, dGRB[2]); // B
+      payload.setUint8(baseOffset,     dRGB[0]); // R
+      payload.setUint8(baseOffset + 1, dRGB[1]); // G
+      payload.setUint8(baseOffset + 2, dRGB[2]); // B
     }
 
     // [Bytes 20-27]: Timing Window Constraints & Evaluation Loop Directives
@@ -715,11 +805,11 @@ class AppBluetoothService {
     final rawBytes = payload.buffer.asUint8List(0, 28);
 
     // Throw a structural error in development if the boundary is violated
-    assert(rawBytes.length == 28, "CRITICAL: Outbound BLE payload must be exactly 28 bytes!");
+    assert(rawBytes.length == 28, 'CRITICAL: Outbound BLE payload must be exactly 28 bytes!');
 
     if (rawBytes.length != 28) {
       debugPrint('[BLE TX ERROR] Blocked malformed payload size: ${rawBytes.length}B');
-      return; // Absolute termination to prevent firmware corruption
+      return;
     }
 
     // 3. Diagnostic Stream Output
@@ -778,15 +868,10 @@ class AppBluetoothService {
         await char.write(chunk, withoutResponse: noResponse);
         offset = end;
 
-        // Microscopic delay context: If the payload is split across an air link due to a 20-byte MTU barrier,
-        // we introduce a tiny pause. This feeds the firmware's serial buffer fast enough to satisfy
-        // the 100ms hardware timeout gate while keeping the stack stable.
         if (offset < frame.length) {
-          // Reduced delay to keep the pipeline full without choking the pod's RX buffer
           await Future.delayed(const Duration(milliseconds: 1));
         }
       }
-      // Trailing 15ms settling delay removed for V1.4.0 high-speed sync
     } catch (e) {
       debugPrint('[BLE] _sendBinaryPacket exception on CMD 0x${cmd.toRadixString(16).toUpperCase()}: $e');
     }
