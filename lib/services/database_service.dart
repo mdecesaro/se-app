@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/services.dart';
 import '../models/athlete.dart';
 import '../models/evaluation_result.dart';
-import 'package:flutter/foundation.dart';
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
@@ -711,14 +709,43 @@ class DatabaseService {
 
   Future<void> saveEvaluationTest(Map<String, dynamic> testData, List<EvaluationResult> results) async {
     final db = await database;
+
     await db.transaction((txn) async {
       final testId = await txn.insert('evaluation_tests', testData);
+
       for (var result in results) {
-        final resultMap = result.toMap();
-        resultMap['test_id'] = testId;
-        // Handle complex types for SQLite
-        resultMap['distractor_id_color'] = json.encode(resultMap['distractor_id_color']);
-        await txn.insert('evaluation_test_results', resultMap);
+        final Map<String, dynamic> resultRow = {
+          'test_id': testId,
+          'round_num': result.roundNum,
+          'attempt_num': result.roundNum,
+          'reaction_time': result.reactionTime,
+          'stimulus_start': result.stimulusStart,
+          'stimulus_end': result.stimulusEnd,
+          'is_error': result.error > 0 ? 1 : 0,
+          'wrong_sensor_id': result.wrongSensorId == 0 ? null : result.wrongSensorId,
+          'foot_used': result.footUsed,
+        };
+
+        final int resultId = await txn.insert('evaluation_test_results', resultRow);
+        if (result.stimulusId >= 1 && result.stimulusId <= 14) {
+          await txn.insert('result_targets', {
+            'result_id': resultId,
+            'pod_id': result.stimulusId,
+            'color_hex': result.correctColor,
+          });
+        }
+        for (var dist in result.distractorIdColor) {
+          final int? podId = dist['id'] as int?;
+          final String? colorHex = dist['color'] as String?;
+
+          if (podId != null && colorHex != null) {
+            await txn.insert('result_distractors', {
+              'result_id': resultId,
+              'pod_id': podId,
+              'color_hex': colorHex,
+            });
+          }
+        }
       }
     });
   }

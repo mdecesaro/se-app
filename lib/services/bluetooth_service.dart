@@ -14,8 +14,8 @@ enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEn
 class SensorEvent {
   SensorEvent({
     required this.type,
-    required this.sensorId,
-    required this.mode,
+    this.sensorId = 0,
+    this.mode = 0,
     this.reactionTime,
     this.errorType,
     this.wrongSensorId,
@@ -66,12 +66,13 @@ abstract final class _Protocol {
   static const int evtOn               = 0x10;
   static const int evtHit              = 0x11;
   static const int evtMiss             = 0x12;
-  static const int evtEnd              = 0x13;
+  //static const int evtEnd              = 0x13;
   static const int evtPressure         = 0x14;
   static const int evtCountdownStarted = 0x16;
   static const int evtAnimationStep    = 0x17;
   static const int evtCountdownEnded   = 0x18;
   static const int evtGameStarted      = 0x20;
+  static const int evtGameEnded        = 0x21;
 
   static const int maxBufferBytes  = 64 * 1024;
   static const int initialBufSize  =  8 * 1024;
@@ -105,7 +106,6 @@ class _FrameParser {
   final void Function(Int32List snapshot)                            onPressure;
   final void Function(String deviceId, int podCount, String version) onHandshake;
 
-  // ✅ CORREÇÃO: Variáveis do rastreador absoluto de latência pura de rede BLE
   int? _firstHardwareEndTS;
   int? _firstDigitalTimestamp;
 
@@ -288,24 +288,7 @@ class _FrameParser {
   }
 
   void _handleBinaryPacket(int cmd, int offset, int len) {
-    // ⏱️ Captura o milissegundo exato do celular assim que o pacote entra no topo, protegendo a métrica de desvios.
     final int nowDigital = DateTime.now().millisecondsSinceEpoch;
-
-    // 🚀 OTIMIZAÇÃO: Conversão de strings pesadas apenas em modo Debug para salvar CPU
-    if (kDebugMode) {
-      final fullFrame = Uint8List.sublistView(_buf, offset - 3, offset + len + 1);
-      final hex = fullFrame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
-
-      String label = 'CMD_0x${cmd.toRadixString(16).toUpperCase()}';
-      if (cmd == 0x10) label = 'EVT_SENSOR_ON';
-      else if (cmd == 0x11) label = 'EVT_SENSOR_HIT';
-      else if (cmd == 0x12) label = 'EVT_SENSOR_MISS';
-      else if (cmd == 0x16) label = 'EVT_COUNTDOWN_START';
-      else if (cmd == 0x17) label = 'EVT_COUNTDOWN_STEP';
-      else if (cmd == 0x18) label = 'EVT_COUNTDOWN_ENDED';
-
-      debugPrint('[FW RX] $label | $hex');
-    }
 
     final data = ByteData.sublistView(_buf, offset, offset + len);
 
@@ -392,6 +375,9 @@ class _FrameParser {
           final int attempt  = data.getUint8(1);
           final int podId    = data.getUint8(2);
 
+          // Firmware (0-13) -> Flutter (1-14)
+          final int normalizedPodId = podId + 1;
+
           final int rt      = data.getUint32(3, Endian.big);
           final int startTS = data.getUint32(7, Endian.big);
           final int endTS   = data.getUint32(11, Endian.big);
@@ -408,7 +394,7 @@ class _FrameParser {
 
           if (kDebugMode) {
             debugPrint('=== BLE TRANSPORT DELTA (HIT) ===');
-            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $podId');
+            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $normalizedPodId');
             debugPrint('Reaction Time (hw): ${rt}ms');
             debugPrint('Round hw elapsed:   ${hwElapsed}ms');
             debugPrint('Round dig elapsed:  ${digElapsed}ms');
@@ -419,7 +405,7 @@ class _FrameParser {
           onEvent(SensorEvent(
             type:         SensorEventType.hit,
             mode:         roundIdx,
-            sensorId:     podId,
+            sensorId:     normalizedPodId,
             reactionTime: rt,
             stimuliStart: startTS,
             stimuliEnd:   endTS,
@@ -432,6 +418,7 @@ class _FrameParser {
           final int roundIdx   = data.getUint8(0);
           final int attempt    = data.getUint8(1);
           final int faultPodId = data.getUint8(2);
+          final int normalizedFaultId = (faultPodId == 255) ? 255 : (faultPodId + 1);
 
           final int startTS    = data.getUint32(7, Endian.big);
           final int endTS      = data.getUint32(11, Endian.big);
@@ -447,7 +434,7 @@ class _FrameParser {
 
           if (kDebugMode) {
             debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
-            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod Falhado: $faultPodId');
+            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod Falhado: $normalizedFaultId');
             debugPrint('Round hw elapsed:   ${hwElapsed}ms');
             debugPrint('Round dig elapsed:  ${digElapsed}ms');
             debugPrint('🚨 BLE delta:       ${bleDelta}ms');
@@ -457,7 +444,7 @@ class _FrameParser {
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
             mode:          roundIdx,
-            sensorId:      faultPodId,
+            sensorId:      normalizedFaultId,
             errorType:     faultPodId == 255 ? 2 : 1, // 255 = Timeout
             wrongSensorId: faultPodId,
             stimuliStart:  startTS,
@@ -466,28 +453,9 @@ class _FrameParser {
         }
         break;
 
-      case _Protocol.evtEnd:
-        if (len >= 10) { // Updated for 32-bit totalMs + 16-bit hits + 16-bit misses? Check C++
-          // Assuming V1.4.0 might have expanded these too. 
-          // C++ typically uses uint32_t for total session time.
-          onEvent(SensorEvent(
-            type:     SensorEventType.end,
-            mode:     0,
-            sensorId: 0,
-            totalMs:  data.getUint32(0, Endian.big),
-            hits:     data.getUint16(4, Endian.big),
-            misses:   data.getUint16(6, Endian.big),
-          ));
-        } else if (len >= 6) {
-          onEvent(SensorEvent(
-            type:     SensorEventType.end,
-            mode:     0,
-            sensorId: 0,
-            totalMs:  data.getUint16(0, Endian.big),
-            hits:     data.getUint16(2, Endian.big),
-            misses:   data.getUint16(4, Endian.big),
-          ));
-        }
+      case _Protocol.evtGameEnded:
+        if (kDebugMode) debugPrint('[Parser] 🏁 EVT_GAME_ENDED recebido!');
+        onEvent(SensorEvent(type: SensorEventType.end));
         break;
     }
   }

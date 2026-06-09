@@ -53,8 +53,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   int _misses = 0;
   int _totalSessionMs = 0;
   int _currentRound = 1;
-  int _targetHitsPerRound = 10;
-  int _hitsInRound = 0;
 
   // 🔥 CORREÇÃO: Mudado de int para Set<int> para aguentar múltiplos alvos simultâneos
   final Set<int> _activeTargets = {};
@@ -91,17 +89,46 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   Future<void> _loadSensors() async {
-    final db = await DatabaseService().database;
-    final List<Map<String, dynamic>> maps = await db.query('sensors');
-    setState(() {
-      _sensorDefinitions = maps.map((m) => SensorDefinition(
-        id: m['sensor'],
-        x: (m['x_c'] as num).toDouble(),
-        y: (m['y_c'] as num).toDouble(),
-        sector: m['sector'] ?? "unknown",
-        expectedFoot: m['expected_foot'] ?? "unknown",
-      )).toList();
-    });
+    try {
+      final db = await DatabaseService().database;
+      final List<Map<String, dynamic>> maps = await db.query('sensors');
+
+      // 1. Imprime a quantidade bruta de linhas retornadas pelo banco
+      debugPrint('=== 📂 [DATABASE] LENDO TABELA SENSORS ===');
+      debugPrint('Total de registros encontrados no SQLite: ${maps.length}');
+
+      final List<SensorDefinition> loadedSensors = [];
+
+      for (var m in maps) {
+        final int? sensorId = m['sensor'];
+        final String sector = m['sector'] ?? "unknown";
+        final String expectedFoot = m['expected_foot'] ?? "unknown";
+
+        // 2. Log detalhado linha por linha para inspecionar os IDs e Pés Esperados
+        debugPrint('  📍 Carregado -> ID Físico (sensor): $sensorId | Setor: $sector | Pé Esperado: $expectedFoot');
+
+        if (sensorId != null) {
+          loadedSensors.add(SensorDefinition(
+            id: sensorId,
+            x: (m['x_c'] as num).toDouble(),
+            y: (m['y_c'] as num).toDouble(),
+            sector: sector,
+            expectedFoot: expectedFoot,
+          ));
+        }
+      }
+
+      setState(() {
+        _sensorDefinitions = loadedSensors;
+      });
+
+      // 3. Resumo final da estrutura na memória da Screen
+      debugPrint('✅ [LOAD COMPLETE] _sensorDefinitions populado com ${_sensorDefinitions.length} sensores.');
+      debugPrint('=========================================');
+
+    } catch (e) {
+      debugPrint('❌ [ERROR] Erro ao carregar sensores: $e');
+    }
   }
 
   void _setupDataListener() {
@@ -127,8 +154,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _hits = 0;
       _misses = 0;
       _currentRound = 1;
-      _hitsInRound = 0;
-      _activeTargets.clear();
+     _activeTargets.clear();
       _activeDistractors = {};
       _countdownValue = -1;
     });
@@ -219,7 +245,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() {
           _hits++;
           _currentRound++;
-          _hitsInRound = 0;
 
           _activeTargets.clear();
           _activeDistractors = {};
@@ -248,7 +273,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.end:
-        _totalSessionMs = event.totalMs ?? 0;
+        _totalSessionMs = stopwatch.elapsedMilliseconds;
         _addLog("🏁 Session Summary: ${event.hits} hits, ${event.misses} misses");
         _finishSession();
         break;
@@ -269,14 +294,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _misses = 0;
         _totalSessionMs = 0;
         _currentRound = 1;
-        _hitsInRound = 0;
         _results = [];
         _activeTargets.clear();
         _activeDistractors = {};
-        _sessionGuid = DateTime.now().millisecondsSinceEpoch.toString() + "_" + math.Random().nextInt(9999).toString();
+        _sessionGuid = "${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999)}";
         formattedTime = "00:00.0";
-
-        _targetHitsPerRound = params['target_qty'] ?? 10;
         _correctColor = params['target_rgb_hex'] ?? "#00FF00";
 
         _addLog("➡️ Sending Binary Configuration...");
@@ -361,24 +383,44 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
       final hitsList = _results.where((r) => r.error == 0).toList();
       double avgRT = hitsList.isEmpty
-          ? 0
+          ? 0.0
           : hitsList.map((e) => e.reactionTime).reduce((a, b) => a + b) / hitsList.length;
+      avgRT = double.parse(avgRT.toStringAsFixed(1));
 
       final testData = {
         'athlete_id': _athleteId,
         'exercise_id': widget.exercise.id,
-        'device_id': _bluetoothService.connectedDevice?.remoteId.toString(),
+        'device_id': _bluetoothService.connectedDevice?.remoteId.toString() ?? 'unknown_device',
         'platform_version': _bluetoothService.firmwareVersion,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'session_guid': _sessionGuid,
-        'stimuli_count': params['target_qty'],
-        'delay_type': params['delay_type']?.toString(),
-        'delay_min_ms': params['delay_min_ms'],
-        'delay_max_ms': params['delay_max_ms'],
-        'execution_rounds': params['game_rounds'],
-        'timeout_ms': params['timeout_ms'],
-        'repeat_if_wrong': (params['repeat_if_wrong'] == true) ? 1 : 0,
+
+        // Dados de Configuração Básica do Jogo
+        'game_mode': params['game_mode'] ?? 1,
+        'execution_rounds': params['game_rounds'] ?? 1,
         'total_attempts': _hits + _misses,
+        'timeout_ms': params['timeout_ms'] ?? 0,
+        'repeat_if_wrong': (params['repeat_if_wrong'] == true) ? 1 : 0,
+
+        // Configuração de Delays
+        'delay_type': params['delay_type']?.toString() ?? '1',
+        'delay_min_ms': params['delay_min_ms'] ?? 500,
+        'delay_max_ms': params['delay_max_ms'] ?? 500,
+
+        // Configuração de Alvos (Targets)
+        'target_logic': params['target_logic'] ?? 1,
+        'target_qty': params['target_qty'] ?? 10,
+        'target_rgb_hex': params['target_rgb_hex'] ?? "#00FF00",
+
+        // Configuração de Distratores
+        'dist_mode': params['dist_mode'] ?? 0,
+        'dist_behavior': params['dist_behavior'] ?? 0,
+        'dist_qty': params['dist_qty'] ?? 0,
+        'dist_rgbs_hex': (params['dist_rgbs_hex'] is List)
+            ? json.encode(params['dist_rgbs_hex']) // Transforma a lista de string em JSON TEXT para o SQLite
+            : json.encode([]),
+
+        // Resultados Globais Consolidados da Sessão
         'hits': _hits,
         'errors': _misses,
         'avg_reaction_time': avgRT,
@@ -410,10 +452,26 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   void _recordResult(int round, int sensorId, int reactionTimeMs,
       {required bool isHit, int errType = 0, int wrongSensorId = 0, int stimuliStart = 0, int stimuliEnd = 0}) {
+
     final sensorDef = _sensorDefinitions.firstWhere(
           (s) => s.id == sensorId,
-      orElse: () => SensorDefinition(id: sensorId, x: 0, y: 0, sector: "unknown", expectedFoot: "unknown"),
+      orElse: () => SensorDefinition(
+        id: sensorId,
+        x: 0,
+        y: 0,
+        sector: sensorId == 255 ? "Timeout" : "unknown",
+        expectedFoot: sensorId == 255 ? "None" : "unknown",
+      ),
     );
+
+    // 🎯 LOG DE VALIDAÇÃO CRUCIAL (Pode apagar depois que comemorar o sucesso)
+    debugPrint('--------------------------------------------------');
+    debugPrint('💾 [SQLITE PRE-SAVE LOG] Round #$round');
+    debugPrint('👉 ID Recebido do Parser: $sensorId');
+    debugPrint('📍 Setor Localizado no DB: ${sensorDef.sector}');
+    debugPrint('🦵 Pé Vinculado no DB: ${sensorDef.expectedFoot}');
+    debugPrint('⏱️ Tempo de Reação: ${reactionTimeMs}ms | Status: ${isHit ? "✅ HIT" : "❌ MISS"}');
+    debugPrint('--------------------------------------------------');
 
     final result = EvaluationResult(
       roundNum: round,
