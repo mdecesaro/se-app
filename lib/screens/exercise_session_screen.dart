@@ -202,7 +202,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         });
         _addLog("Targets ON: Sensors ${_activeTargets.join(', ')}");
         break;
-
+      case SensorEventType.clearScreen:
+        setState(() {
+          _activeTargets.clear();
+          _activeDistractors = {};
+        });
+        _addLog("❌ Targets OFF");
+        break;
       case SensorEventType.hit:
         _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0,
             isHit: true,
@@ -212,7 +218,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
         setState(() {
           _hits++;
-          _currentRound++; // Avança a rodada já que um único acerto finaliza a leva
+          _currentRound++;
           _hitsInRound = 0;
 
           _activeTargets.clear();

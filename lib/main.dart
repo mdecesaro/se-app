@@ -15,10 +15,10 @@ void main() {
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);
-  
+
   // Initialize Services
   AppBluetoothService().init();
-  
+
   runApp(const MyApp());
 }
 
@@ -68,7 +68,7 @@ class _MainScreenState extends State<MainScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadAthlete();
     _loadAthleteStats();
-    
+
     // Add listener to refresh stats when switching to Dashboard
     _controller.addListener(() {
       if (_controller.selectedIndex == 0) {
@@ -79,8 +79,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
-    // SidebarXController doesn't strictly need manual disposal if not owned here,
-    // but cleaning up listeners is good practice if we were to recreate it.
+    _controller.dispose(); // Descarta o controlador para evitar vazamentos de memória
     super.dispose();
   }
 
@@ -95,20 +94,17 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _loadAthleteStats() async {
     final db = await DatabaseService().database;
-    
+
     // Calculate Average Reaction Time from all tests
     final List<Map<String, dynamic>> result = await db.rawQuery('''
       SELECT AVG(avg_reaction_time) as avg_rt FROM evaluation_tests
     ''');
-    
+
     if (result.isNotEmpty && result.first['avg_rt'] != null) {
-      // Safely parse the numeric value from SQLite
       double avgRt = (result.first['avg_rt'] as num).toDouble();
-      
+
       setState(() {
         _athleteStats['Reaction'] = double.parse(avgRt.toStringAsFixed(1));
-        
-        // Score Calculation: 100 points baseline, -1 point for every 10ms over 200ms
         double score = 100 - ((avgRt - 200) / 10);
         _athleteStats['Overall'] = score.clamp(0, 100).roundToDouble();
       });
@@ -126,22 +122,23 @@ class _MainScreenState extends State<MainScreen> {
 
     return Scaffold(
       key: _key,
-      backgroundColor: const Color(0xFF121212), // Professional Dark Theme
+      backgroundColor: const Color(0xFF121212),
       drawer: ExampleSidebarX(
-        controller: _controller, 
+        controller: _controller,
         athlete: _currentAthlete,
         stats: _athleteStats,
       ),
       body: Row(
         children: [
           if (!isSmallScreen) ExampleSidebarX(
-            controller: _controller, 
+            controller: _controller,
             athlete: _currentAthlete,
             stats: _athleteStats,
           ),
           Expanded(
-            child: AnimatedBuilder(
-              animation: _controller,
+            // Corrigido: ListenableBuilder isola as trocas de abas e previne o erro de ciclo de vida
+            child: ListenableBuilder(
+              listenable: _controller,
               builder: (context, child) {
                 switch (_controller.selectedIndex) {
                   case 0:
@@ -151,7 +148,7 @@ class _MainScreenState extends State<MainScreen> {
                   case 2:
                     return const BluetoothScreen();
                   case 3:
-                    return MeScreen(athlete: _currentAthlete); // Show the MeScreen
+                    return MeScreen(athlete: _currentAthlete);
                   default:
                     return const Center(child: Text('Page not found', style: TextStyle(color: Colors.white, fontSize: 40)));
                 }
@@ -166,7 +163,7 @@ class _MainScreenState extends State<MainScreen> {
 
 class ExampleSidebarX extends StatelessWidget {
   const ExampleSidebarX({
-    super.key, 
+    super.key,
     required SidebarXController controller,
     this.athlete,
     required this.stats,
@@ -179,8 +176,9 @@ class ExampleSidebarX extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    
+
     return SidebarX(
+      key: ValueKey(_controller.selectedIndex), // Sincroniza o estado visual das abas
       controller: _controller,
       theme: SidebarXTheme(
         margin: const EdgeInsets.all(10),
@@ -251,48 +249,53 @@ class ExampleSidebarX extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Avatar and Overall Score Row
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 65,
-                    height: 65,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                      image: athlete!.profile.isNotEmpty
-                          ? DecorationImage(
-                              image: MemoryImage(athlete!.profile),
-                              fit: BoxFit.cover,
-                            )
-                          : null,
-                    ),
-                    child: athlete!.profile.isEmpty
-                        ? const Icon(Icons.person, color: Colors.white, size: 40)
-                        : null,
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+              // CONSERTADO: Flexible + FittedBox para impedir o estouro horizontal na animação
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        "${stats['Overall']?.toInt() ?? 0}",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 34,
-                          height: 1.0,
+                      Container(
+                        width: 65,
+                        height: 65,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          image: athlete!.profile.isNotEmpty
+                              ? DecorationImage(
+                            image: MemoryImage(athlete!.profile),
+                            fit: BoxFit.cover,
+                          )
+                              : null,
                         ),
+                        child: athlete!.profile.isEmpty
+                            ? const Icon(Icons.person, color: Colors.white, size: 40)
+                            : null,
                       ),
-                      const SizedBox(height: 4),
-                      _getFlagIcon(athlete!.country),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            "${stats['Overall']?.toInt() ?? 0}",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 34,
+                              height: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          _getFlagIcon(athlete!.country),
+                        ],
+                      ),
                     ],
                   ),
-                ],
+                ),
               ),
               const SizedBox(height: 12),
-              // Full Name
               Text(
                 athlete!.name.toUpperCase(),
                 textAlign: TextAlign.center,
@@ -306,7 +309,6 @@ class ExampleSidebarX extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
-              // Position
               Text(
                 athlete!.position.toUpperCase(),
                 textAlign: TextAlign.center,
@@ -317,7 +319,6 @@ class ExampleSidebarX extends StatelessWidget {
                   letterSpacing: 1.2,
                 ),
               ),
-              // Preferred Number
               Text(
                 "${athlete!.preferredNumber}",
                 textAlign: TextAlign.center,
@@ -328,7 +329,6 @@ class ExampleSidebarX extends StatelessWidget {
                 ),
               ),
               _buildSidebarGradientDivider(12),
-              // Abilities
               _buildSidebarStatRow("Reaction", stats['Reaction']!, "Agility", 72),
               const SizedBox(height: 8),
               _buildSidebarStatRow("Balance", 61, "Decision", 69),
@@ -371,7 +371,7 @@ class ExampleSidebarX extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         Text(
-          label == "Reaction" ? "${value.toInt()}" : "${value.toInt()}",
+          "${value.toInt()}",
           style: const TextStyle(
             color: Colors.white,
             fontSize: 18,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import 'package:permission_handler/permission_handler.dart';
@@ -8,7 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, ack, nack }
+enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, clearScreen, ack, nack }
 
 class SensorEvent {
   SensorEvent({
@@ -61,6 +62,7 @@ abstract final class _Protocol {
   static const int msgNack        = 0x15;
 
   // Event codes (device → host)
+  static const int evtClearScreen      = 0x1A;
   static const int evtOn               = 0x10;
   static const int evtHit              = 0x11;
   static const int evtMiss             = 0x12;
@@ -69,6 +71,7 @@ abstract final class _Protocol {
   static const int evtCountdownStarted = 0x16;
   static const int evtAnimationStep    = 0x17;
   static const int evtCountdownEnded   = 0x18;
+  static const int evtGameStarted      = 0x20;
 
   static const int maxBufferBytes  = 64 * 1024;
   static const int initialBufSize  =  8 * 1024;
@@ -102,17 +105,17 @@ class _FrameParser {
   final void Function(Int32List snapshot)                            onPressure;
   final void Function(String deviceId, int podCount, String version) onHandshake;
 
+  // ✅ CORREÇÃO: Variáveis do rastreador absoluto de latência pura de rede BLE
+  int? _firstHardwareEndTS;
+  int? _firstDigitalTimestamp;
+
   Uint8List _buf = Uint8List(_Protocol.initialBufSize);
   int       _len = 0;
   bool      _handshakeDone = false;
 
-  // FIX 1 — Reentrance guard: prevents concurrent feed() calls from
-  // corrupting _buf/_len when sync StreamControllers fire callbacks
-  // mid-parse (e.g. EVT_HIT listener triggering another feed() call).
   bool            _parsing   = false;
   final List<List<int>> _feedQueue = [];
 
-  // Pool of buffers to avoid GC pressure while ensuring shouldRepaint sees reference changes
   final List<Int32List> _pPool = List.generate(8, (_) => Int32List(_Protocol.pressureSensors));
   int _pIdx = 0;
 
@@ -125,18 +128,18 @@ class _FrameParser {
     }
     _pIdx         = 0;
     _handshakeDone = false;
+
+    // ✅ CORREÇÃO: Limpa de forma segura as âncoras temporais no reset do jogo
+    _firstHardwareEndTS   = null;
+    _firstDigitalTimestamp = null;
   }
 
-  // FIX 1 — Queue-draining feed() replaces direct buffer manipulation.
-  // If a listener callback calls feed() while _parse() is running, the
-  // new bytes are enqueued and processed after the current _parse() returns,
-  // keeping _buf/_len consistent at all times.
   void feed(List<int> bytes) {
     if (bytes.isEmpty) return;
 
     _feedQueue.add(List<int>.of(bytes));
 
-    if (_parsing) return; // already inside the drain loop — just enqueue
+    if (_parsing) return;
     _parsing = true;
 
     while (_feedQueue.isNotEmpty) {
@@ -195,6 +198,21 @@ class _FrameParser {
 
       if (byte == _Protocol.sof) {
         final remaining = _len - cursor;
+
+        if (remaining >= 2 && _buf[cursor + 1] == _Protocol.evtClearScreen) {
+          if (kDebugMode) debugPrint('[FW RX] EVT_SCREEN_CLEAR | AA 1A');
+          onEvent(SensorEvent(
+            type:         SensorEventType.clearScreen,
+            mode:         0,
+            sensorId:     0,
+            reactionTime: 0,
+            stimuliStart: 0,
+            stimuliEnd:   0,
+          ));
+          cursor += 2;
+          continue;
+        }
+
         if (remaining < 4) break;
 
         final payloadLen = _buf[cursor + 2];
@@ -215,7 +233,6 @@ class _FrameParser {
         continue;
       }
 
-      // Speculative ASCII parsing (Gated for production performance)
       if (kDebugMode && byte >= 32 && byte <= 126) {
         int end = -1;
         for (int i = cursor; i < _len; i++) {
@@ -271,31 +288,39 @@ class _FrameParser {
   }
 
   void _handleBinaryPacket(int cmd, int offset, int len) {
-    // Print every binary frame in hex
-    final fullFrame = Uint8List.sublistView(_buf, offset - 3, offset + len + 1);
-    final hex = fullFrame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
+    // ⏱️ Captura o milissegundo exato do celular assim que o pacote entra no topo, protegendo a métrica de desvios.
+    final int nowDigital = DateTime.now().millisecondsSinceEpoch;
 
-    String label = 'CMD_0x${cmd.toRadixString(16).toUpperCase()}';
-    if (cmd == 0x10) label = 'EVT_SENSOR_ON';
-    else if (cmd == 0x11) label = 'EVT_SENSOR_HIT';
-    else if (cmd == 0x12) label = 'EVT_SENSOR_MISS';
-    else if (cmd == 0x16) label = 'EVT_COUNTDOWN_START';
-    else if (cmd == 0x17) label = 'EVT_COUNTDOWN_STEP';
-    else if (cmd == 0x18) label = 'EVT_COUNTDOWN_ENDED';
+    // 🚀 OTIMIZAÇÃO: Conversão de strings pesadas apenas em modo Debug para salvar CPU
+    if (kDebugMode) {
+      final fullFrame = Uint8List.sublistView(_buf, offset - 3, offset + len + 1);
+      final hex = fullFrame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
 
-    debugPrint('[FW RX] $label | $hex');
+      String label = 'CMD_0x${cmd.toRadixString(16).toUpperCase()}';
+      if (cmd == 0x10) label = 'EVT_SENSOR_ON';
+      else if (cmd == 0x11) label = 'EVT_SENSOR_HIT';
+      else if (cmd == 0x12) label = 'EVT_SENSOR_MISS';
+      else if (cmd == 0x16) label = 'EVT_COUNTDOWN_START';
+      else if (cmd == 0x17) label = 'EVT_COUNTDOWN_STEP';
+      else if (cmd == 0x18) label = 'EVT_COUNTDOWN_ENDED';
+
+      debugPrint('[FW RX] $label | $hex');
+    }
 
     final data = ByteData.sublistView(_buf, offset, offset + len);
 
     switch (cmd) {
+      case _Protocol.evtGameStarted:
+        _firstHardwareEndTS = null;
+        _firstDigitalTimestamp = null;
+        if (kDebugMode) debugPrint('[Parser] ⏱️ EVT_GAME_STARTED recebido! Âncoras de latência resetadas.');
+        break;
       case _Protocol.evtCountdownStarted:
-      // Payload is 1 byte: The value '5' (initial start)
         final val = len > 0 ? data.getUint8(0) : 5;
         onEvent(SensorEvent(type: SensorEventType.countdown, mode: val, sensorId: 0));
         break;
 
       case _Protocol.evtAnimationStep:
-      // Payload is 1 byte: The current countdown integer (3, 2, 1, 0)
         final val = len > 0 ? data.getUint8(0) : 0;
         onEvent(SensorEvent(type: SensorEventType.animationStep, mode: val, sensorId: 0));
         break;
@@ -326,9 +351,7 @@ class _FrameParser {
           final List<int> targetPods = [];
           for (int i = 0; i < targetQty; i++) {
             if (cursor < len) {
-              // Read the raw 0-indexed firmware ID (e.g., 9)
               final int rawPodId = data.getUint8(cursor++);
-              // Convert it to a 1-indexed human display ID (9 + 1 = 10)
               targetPods.add(rawPodId + 1);
             }
           }
@@ -349,7 +372,6 @@ class _FrameParser {
               final String hexColor = '#${dR.toRadixString(16).padLeft(2, '0')}'
                   '${dG.toRadixString(16).padLeft(2, '0')}'
                   '${dB.toRadixString(16).padLeft(2, '0')}';
-              // Convert distractor pod IDs to 1-indexed human numbers as well
               distractorsMap[dRawPodId + 1] = hexColor.toUpperCase();
             }
           }
@@ -365,18 +387,39 @@ class _FrameParser {
         break;
 
       case _Protocol.evtHit:
-        if (len >= 13) {
-          // Read the raw 0-indexed firmware hit value (9)
-          final int rawClearedPodId = data.getUint8(0);
+        if (len >= 15) { // 1(round) + 1(attempt) + 1(pod) + 4(rt) + 4(start) + 4(end) = 15 bytes
+          final int roundIdx = data.getUint8(0);
+          final int attempt  = data.getUint8(1);
+          final int podId    = data.getUint8(2);
 
-          final int rt      = data.getUint32(1, Endian.big);
-          final int startTS = data.getUint32(5, Endian.big);
-          final int endTS   = data.getUint32(9, Endian.big);
+          final int rt      = data.getUint32(3, Endian.big);
+          final int startTS = data.getUint32(7, Endian.big);
+          final int endTS   = data.getUint32(11, Endian.big);
+
+          if (_firstHardwareEndTS == null) {
+            _firstHardwareEndTS = endTS;
+            _firstDigitalTimestamp = nowDigital;
+          }
+
+          // Rollover-safe subtraction for 32-bit unsigned timestamps
+          final int hwElapsed  = (endTS - _firstHardwareEndTS!) & 0xFFFFFFFF;
+          final int digElapsed = nowDigital - _firstDigitalTimestamp!;
+          final int bleDelta   = digElapsed - hwElapsed;
+
+          if (kDebugMode) {
+            debugPrint('=== BLE TRANSPORT DELTA (HIT) ===');
+            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $podId');
+            debugPrint('Reaction Time (hw): ${rt}ms');
+            debugPrint('Round hw elapsed:   ${hwElapsed}ms');
+            debugPrint('Round dig elapsed:  ${digElapsed}ms');
+            debugPrint('🚨 BLE delta:       ${bleDelta}ms');
+            debugPrint('=================================');
+          }
 
           onEvent(SensorEvent(
             type:         SensorEventType.hit,
-            mode:         0,
-            sensorId:     rawClearedPodId + 1, // Converts 9 to 10 for UI layout parity
+            mode:         roundIdx,
+            sensorId:     podId,
             reactionTime: rt,
             stimuliStart: startTS,
             stimuliEnd:   endTS,
@@ -385,18 +428,37 @@ class _FrameParser {
         break;
 
       case _Protocol.evtMiss:
-        if (len >= 9) {
-          // Byte 0 is the mis-tapped pod ID, or 0 if a timeout occurred
-          final int faultPodId = data.getUint8(0);
+        if (len >= 15) {
+          final int roundIdx   = data.getUint8(0);
+          final int attempt    = data.getUint8(1);
+          final int faultPodId = data.getUint8(2);
 
-          final int startTS = data.getUint32(1, Endian.big);
-          final int endTS   = data.getUint32(5, Endian.big);
+          final int startTS    = data.getUint32(7, Endian.big);
+          final int endTS      = data.getUint32(11, Endian.big);
+
+          if (_firstHardwareEndTS == null) {
+            _firstHardwareEndTS = endTS;
+            _firstDigitalTimestamp = nowDigital;
+          }
+
+          final int hwElapsed  = (endTS - _firstHardwareEndTS!) & 0xFFFFFFFF;
+          final int digElapsed = nowDigital - _firstDigitalTimestamp!;
+          final int bleDelta   = digElapsed - hwElapsed;
+
+          if (kDebugMode) {
+            debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
+            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod Falhado: $faultPodId');
+            debugPrint('Round hw elapsed:   ${hwElapsed}ms');
+            debugPrint('Round dig elapsed:  ${digElapsed}ms');
+            debugPrint('🚨 BLE delta:       ${bleDelta}ms');
+            debugPrint('==================================');
+          }
 
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
-            mode:          0,
+            mode:          roundIdx,
             sensorId:      faultPodId,
-            errorType:     faultPodId == 0 ? 2 : 1, // 2 = Timeout, 1 = Mis-tap
+            errorType:     faultPodId == 255 ? 2 : 1, // 255 = Timeout
             wrongSensorId: faultPodId,
             stimuliStart:  startTS,
             stimuliEnd:    endTS,
@@ -405,14 +467,25 @@ class _FrameParser {
         break;
 
       case _Protocol.evtEnd:
-        if (len >= 6) {
+        if (len >= 10) { // Updated for 32-bit totalMs + 16-bit hits + 16-bit misses? Check C++
+          // Assuming V1.4.0 might have expanded these too. 
+          // C++ typically uses uint32_t for total session time.
           onEvent(SensorEvent(
             type:     SensorEventType.end,
             mode:     0,
             sensorId: 0,
-            totalMs:  data.getUint16(0, Endian.little),
-            hits:     data.getUint16(2, Endian.little),
-            misses:   data.getUint16(4, Endian.little),
+            totalMs:  data.getUint32(0, Endian.big),
+            hits:     data.getUint16(4, Endian.big),
+            misses:   data.getUint16(6, Endian.big),
+          ));
+        } else if (len >= 6) {
+          onEvent(SensorEvent(
+            type:     SensorEventType.end,
+            mode:     0,
+            sensorId: 0,
+            totalMs:  data.getUint16(0, Endian.big),
+            hits:     data.getUint16(2, Endian.big),
+            misses:   data.getUint16(4, Endian.big),
           ));
         }
         break;
@@ -452,7 +525,7 @@ class _FrameParser {
       if (readyMsg == null) return _HandshakeFragment();
 
       onHandshake(deviceId, podCount, version);
-      debugPrint('[BLE] Handshake OK — device: $deviceId  pods: $podCount  fw: $version');
+      if (kDebugMode) debugPrint('[BLE] Handshake OK — device: $deviceId  pods: $podCount  fw: $version');
       return _HandshakeSuccess(pos - start);
     } catch (_) {
       return _HandshakeInvalid();
@@ -467,11 +540,6 @@ class _FrameParser {
       int.parse(hex.substring(2, 4), radix: 16),
       int.parse(hex.substring(4, 6), radix: 16),
     ];
-  }
-
-  static List<int> _hexToGrb(String hex) {
-    final rgb = _hexToRgb(hex);
-    return [rgb[1], rgb[0], rgb[2]];
   }
 }
 
@@ -498,16 +566,11 @@ class AppBluetoothService {
   String _sensorCount     = 'Unknown';
   static const String _registeredUser = 'Michel De Cesaro';
 
-  // FIX 2 — Removed sync: true from _eventController and _dataController.
-  // sync: true causes add() to propagate in the same microtask as the caller,
-  // which means a listener can call feed() again before _parse() has returned,
-  // corrupting the internal buffer state. Async broadcast streams deliver
-  // events in the next microtask, after _parse() has fully completed.
   final _dataController       = StreamController<List<int>>.broadcast();
   final _connectionController = StreamController<fbp.BluetoothConnectionState>.broadcast();
   final _lineController       = StreamController<String>.broadcast();
   final _eventController      = StreamController<SensorEvent>.broadcast();
-  final _pressureController   = StreamController<Int32List>.broadcast(sync: true); // pressure is hot-path, safe to keep sync
+  final _pressureController   = StreamController<Int32List>.broadcast(sync: true);
   Int32List _pressureCache    = Int32List(_Protocol.pressureSensors);
 
   Stream<List<int>>                    get dataStream            => _dataController.stream;
@@ -557,7 +620,6 @@ class AppBluetoothService {
 
   Future<void> startScan({VoidCallback? onUpdate}) async {
     try {
-      // 1. Wait for Bluetooth adapter to be ready (up to 2 seconds)
       try {
         await fbp.FlutterBluePlus.adapterState
             .where((s) => s == fbp.BluetoothAdapterState.on)
@@ -568,7 +630,6 @@ class AppBluetoothService {
         return;
       }
 
-      // 2. Request all necessary permissions
       await [
         Permission.location,
         Permission.bluetoothScan,
@@ -590,9 +651,6 @@ class AppBluetoothService {
                 name.contains('hexon') ||
                 name.contains('bluno') ||
                 name.contains('dfrobot');
-            if (isMatch && name.isNotEmpty) {
-              debugPrint('[BLE] Match found: $name');
-            }
             return isMatch;
           }));
         onUpdate?.call();
@@ -645,6 +703,18 @@ class AppBluetoothService {
 
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
+      // 🚀 PRIORIDADE MÁXIMA NO ANDROID
+      try {
+        if (Platform.isAndroid) {
+          debugPrint('[BLE] Forçando prioridade de conexão máxima (High Performance) no Android...');
+          await device.requestConnectionPriority(
+            connectionPriorityRequest: fbp.ConnectionPriority.high,
+          );
+        }
+      } catch (e) {
+        debugPrint('[BLE] Erro ao solicitar prioridade máxima: $e');
+      }
+
       try {
         debugPrint('[BLE] Requesting expanded link layer MTU configuration (512)...');
         final mtu = await device.requestMtu(512, timeout: 4);
@@ -681,9 +751,6 @@ class AppBluetoothService {
           await char.setNotifyValue(true);
           await _dataSubscription?.cancel();
 
-          // FIX 3 — parser.feed() runs first, then _dataController.add().
-          // This ensures the buffer is fully drained before any downstream
-          // listener (which may call into the service) receives the event.
           _dataSubscription = char.onValueReceived.listen((bytes) {
             _parser.feed(bytes);
             _dataController.add(bytes);
@@ -741,8 +808,6 @@ class AppBluetoothService {
 
   // ── Game commands ─────────────────────────────────────────────────────────
 
-  /// ATOMIC TRANSACTION: Packs the strict 28-byte game configuration struct.
-  /// Enforces explicit memory boundary guards to ensure 100% C++ struct compliance.
   Future<void> sendStartGame({
     required int          gameMode,
     required int          gameRounds,
@@ -760,67 +825,57 @@ class AppBluetoothService {
     required int          timeoutMs,
     required bool         repeatIfWrong,
   }) async {
-    // 1. Allocate an absolute, unchangeable memory block of exactly 28 bytes
     final payload = ByteData(28);
 
-    // [Bytes 0-2]: Primary Loop Configuration
     payload.setUint8(0, gameMode);
     payload.setUint8(1, gameRounds);
     payload.setUint8(2, gameAttempts);
 
-    // [Bytes 3-7]: Target Matrix Parameters and Color Space (RGB)
     payload.setUint8(3, targetQty);
     payload.setUint8(4, targetLogic);
 
     final tRGB = _FrameParser._hexToRgb(targetRGBHex);
-    payload.setUint8(5, tRGB[0]); // targetR
-    payload.setUint8(6, tRGB[1]); // targetG
-    payload.setUint8(7, tRGB[2]); // targetB
+    payload.setUint8(5, tRGB[0]);
+    payload.setUint8(6, tRGB[1]);
+    payload.setUint8(7, tRGB[2]);
 
-    // [Bytes 8-10]: Distractor Matrix Parameters
     payload.setUint8(8,  distMode);
     payload.setUint8(9,  distQty);
     payload.setUint8(10, distBehavior);
 
-    // [Bytes 11-19]: Distractor Color Matrix (Normalized to 3 slots x 3 bytes = 9 bytes total)
-    // If JSON provides fewer than 3 distractors, remaining registers are safely padded with 0x00
     for (int i = 0; i < 3; i++) {
       final String currentHex = (i < distRGBsHex.length) ? distRGBsHex[i] : '#000000';
       final List<int> dRGB = _FrameParser._hexToRgb(currentHex);
       final int baseOffset = 11 + (i * 3);
 
-      payload.setUint8(baseOffset,     dRGB[0]); // R
-      payload.setUint8(baseOffset + 1, dRGB[1]); // G
-      payload.setUint8(baseOffset + 2, dRGB[2]); // B
+      payload.setUint8(baseOffset,     dRGB[0]);
+      payload.setUint8(baseOffset + 1, dRGB[1]);
+      payload.setUint8(baseOffset + 2, dRGB[2]);
     }
 
-    // [Bytes 20-27]: Timing Window Constraints & Evaluation Loop Directives
     payload.setUint8(20,  delayType);
     payload.setUint16(21, delayMinMs,   Endian.little);
     payload.setUint16(23, delayMaxMs,   Endian.little);
     payload.setUint16(25, timeoutMs,    Endian.little);
     payload.setUint8(27,  repeatIfWrong ? 1 : 0);
 
-    // 2. HARD BOUNDARY GUARD: Extract the raw byte array
     final rawBytes = payload.buffer.asUint8List(0, 28);
 
-    // Throw a structural error in development if the boundary is violated
     assert(rawBytes.length == 28, 'CRITICAL: Outbound BLE payload must be exactly 28 bytes!');
 
     if (rawBytes.length != 28) {
-      debugPrint('[BLE TX ERROR] Blocked malformed payload size: ${rawBytes.length}B');
+      if (kDebugMode) debugPrint('[BLE TX ERROR] Blocked malformed payload size: ${rawBytes.length}B');
       return;
     }
 
-    // 3. Diagnostic Stream Output
-    final hexString = rawBytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
-    debugPrint('[BLE TX] Dispatched Verified 28B Payload: $hexString');
+    if (kDebugMode) {
+      final hexString = rawBytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
+      debugPrint('[BLE TX] Dispatched Verified 28B Payload: $hexString');
+    }
 
-    // 4. Dispatch atomic packet (will compile into a perfect 32-byte frame: SOF + CMD + LEN + 28B + CRC)
     await _sendBinaryPacket(_Protocol.cmdSetGame, rawBytes);
   }
 
-  /// Emergency interruption trigger
   Future<void> sendStopGame() => _sendBinaryPacket(_Protocol.cmdStopGame);
 
   // ── MTU-Aware Paced Link Layer Transmission ───────────────────────────────
@@ -835,7 +890,6 @@ class AppBluetoothService {
     final payloadLen = payload?.length ?? 0;
     final frame      = Uint8List(3 + payloadLen + 1);
 
-    // Build perfect hardware header matching SerialManager windows
     frame[0] = _Protocol.sof;
     frame[1] = cmd;
     frame[2] = payloadLen;
@@ -843,7 +897,6 @@ class AppBluetoothService {
       frame.setRange(3, 3 + payloadLen, payload);
     }
 
-    // Explicit structural XOR checksum calculation matching computedCK
     int crc = 0;
     for (int i = 0; i < frame.length - 1; i++) {
       crc ^= frame[i];
@@ -853,12 +906,13 @@ class AppBluetoothService {
     try {
       final bool noResponse = char.properties.writeWithoutResponse;
 
-      // Extract current dynamic negotiated MTU payload capacity (Total MTU size - 3 bytes GATT header)
       final int platformMtuNow = (_connectedDevice?.mtuNow ?? 23) - 3;
       final int chunkSize = platformMtuNow > 0 ? platformMtuNow : 20;
 
-      final fullFrameHex = frame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join('');
-      debugPrint('[BLE TX ATOMIC] Executing frame output: "$fullFrameHex" (Target Segment Limit: ${chunkSize}B)');
+      if (kDebugMode) {
+        final fullFrameHex = frame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join('');
+        debugPrint('[BLE TX ATOMIC] Executing frame output: "$fullFrameHex" (Target Segment Limit: ${chunkSize}B)');
+      }
 
       int offset = 0;
       while (offset < frame.length) {
@@ -867,10 +921,6 @@ class AppBluetoothService {
 
         await char.write(chunk, withoutResponse: noResponse);
         offset = end;
-
-        if (offset < frame.length) {
-          await Future.delayed(const Duration(milliseconds: 1));
-        }
       }
     } catch (e) {
       debugPrint('[BLE] _sendBinaryPacket exception on CMD 0x${cmd.toRadixString(16).toUpperCase()}: $e');
