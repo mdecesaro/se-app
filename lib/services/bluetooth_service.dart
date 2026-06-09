@@ -66,7 +66,6 @@ abstract final class _Protocol {
   static const int evtOn               = 0x10;
   static const int evtHit              = 0x11;
   static const int evtMiss             = 0x12;
-  //static const int evtEnd              = 0x13;
   static const int evtPressure         = 0x14;
   static const int evtCountdownStarted = 0x16;
   static const int evtAnimationStep    = 0x17;
@@ -413,15 +412,16 @@ class _FrameParser {
         }
         break;
 
-      case _Protocol.evtMiss:
+      case _Protocol.evtMiss: // Ambos os eventos agora partilham exatamente a mesma estrutura!
         if (len >= 15) {
-          final int roundIdx   = data.getUint8(0);
-          final int attempt    = data.getUint8(1);
-          final int faultPodId = data.getUint8(2);
-          final int normalizedFaultId = (faultPodId == 255) ? 255 : (faultPodId + 1);
+          final int roundIdx          = data.getUint8(0);
+          final int attempt           = data.getUint8(1);
+          final int rawPodId          = data.getUint8(2); // HIT: Pod correto | MISS: Pod errado (ou 255)
+          final int normalizedPodId   = (rawPodId == 255) ? 255 : (rawPodId + 1);
 
-          final int startTS    = data.getUint32(7, Endian.big);
-          final int endTS      = data.getUint32(11, Endian.big);
+          final int rxTime            = data.getUint32(3, Endian.big);
+          final int startTS           = data.getUint32(7, Endian.big);
+          final int endTS             = data.getUint32(11, Endian.big);
 
           if (_firstHardwareEndTS == null) {
             _firstHardwareEndTS = endTS;
@@ -433,22 +433,21 @@ class _FrameParser {
           final int bleDelta   = digElapsed - hwElapsed;
 
           if (kDebugMode) {
-            debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
-            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod Falhado: $normalizedFaultId');
-            debugPrint('Round hw elapsed:   ${hwElapsed}ms');
-            debugPrint('Round dig elapsed:  ${digElapsed}ms');
-            debugPrint('🚨 BLE delta:       ${bleDelta}ms');
+            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID: $normalizedPodId');
+            debugPrint('Tempo Reação: ${rxTime}ms');
+            debugPrint('🚨 BLE delta:  ${bleDelta}ms');
             debugPrint('==================================');
           }
 
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
             mode:          roundIdx,
-            sensorId:      normalizedFaultId,
-            errorType:     faultPodId == 255 ? 2 : 1, // 255 = Timeout
-            wrongSensorId: faultPodId,
+            sensorId:      normalizedPodId,
+            errorType:     rawPodId == 255 ? 2 : 1, // 0=Acerto, 1=Erro, 2=Timeout
+            wrongSensorId: normalizedPodId,
             stimuliStart:  startTS,
             stimuliEnd:    endTS,
+            reactionTime:  rxTime, // Mapeado diretamente e com precisão!
           ));
         }
         break;
