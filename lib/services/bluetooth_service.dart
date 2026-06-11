@@ -14,11 +14,13 @@ enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEn
 class SensorEvent {
   SensorEvent({
     required this.type,
+    this.roundnum = 0,
+    this.attempt = 0,
     this.sensorId = 0,
-    this.mode = 0,
     this.reactionTime,
     this.errorType,
     this.wrongSensorId,
+    this.countdownValue = 0,
     List<int>? color,
     Map<int, String>? distractors,
     this.stimuliStart,
@@ -30,11 +32,13 @@ class SensorEvent {
         distractors = distractors != null ? Map.unmodifiable(distractors) : null;
 
   final SensorEventType   type;
+  final int               roundnum;
+  final int               attempt;
   final int               sensorId;
-  final int               mode;
   final int?              reactionTime;
   final int?              errorType;
   final int?              wrongSensorId;
+  final int               countdownValue;
   final List<int>?        color;
   final Map<int, String>? distractors;
   final int?              stimuliStart;
@@ -187,10 +191,7 @@ class _FrameParser {
         }
         onLine(isAck ? 'ACK' : 'NACK');
         onEvent(SensorEvent(
-          type: isAck ? SensorEventType.ack : SensorEventType.nack,
-          sensorId: 0,
-          mode: 0,
-        ));
+          type: isAck ? SensorEventType.ack : SensorEventType.nack));
         cursor++;
         continue;
       }
@@ -201,13 +202,8 @@ class _FrameParser {
         if (remaining >= 2 && _buf[cursor + 1] == _Protocol.evtClearScreen) {
           if (kDebugMode) debugPrint('[FW RX] EVT_SCREEN_CLEAR | AA 1A');
           onEvent(SensorEvent(
-            type:         SensorEventType.clearScreen,
-            mode:         0,
-            sensorId:     0,
-            reactionTime: 0,
-            stimuliStart: 0,
-            stimuliEnd:   0,
-          ));
+            type:SensorEventType.clearScreen)
+          );
           cursor += 2;
           continue;
         }
@@ -299,16 +295,16 @@ class _FrameParser {
         break;
       case _Protocol.evtCountdownStarted:
         final val = len > 0 ? data.getUint8(0) : 5;
-        onEvent(SensorEvent(type: SensorEventType.countdown, mode: val, sensorId: 0));
+        onEvent(SensorEvent(type: SensorEventType.countdown, countdownValue: val));
         break;
 
       case _Protocol.evtAnimationStep:
         final val = len > 0 ? data.getUint8(0) : 0;
-        onEvent(SensorEvent(type: SensorEventType.animationStep, mode: val, sensorId: 0));
+        onEvent(SensorEvent(type: SensorEventType.animationStep, countdownValue: val));
         break;
 
       case _Protocol.evtCountdownEnded:
-        onEvent(SensorEvent(type: SensorEventType.countdownEnded, mode: 0, sensorId: 0));
+        onEvent(SensorEvent(type: SensorEventType.countdownEnded, countdownValue: 0));
         break;
 
       case _Protocol.evtPressure:
@@ -360,7 +356,6 @@ class _FrameParser {
 
           onEvent(SensorEvent(
             type:        SensorEventType.on,
-            mode:        targetQty,
             sensorId:    targetPods.isNotEmpty ? targetPods.first : 0,
             color:       [r, g, b, ...targetPods],
             distractors: distractorsMap,
@@ -403,7 +398,8 @@ class _FrameParser {
 
           onEvent(SensorEvent(
             type:         SensorEventType.hit,
-            mode:         roundIdx,
+            roundnum:     roundIdx,
+            attempt:      attempt,
             sensorId:     normalizedPodId,
             reactionTime: rt,
             stimuliStart: startTS,
@@ -412,12 +408,14 @@ class _FrameParser {
         }
         break;
 
-      case _Protocol.evtMiss: // Ambos os eventos agora partilham exatamente a mesma estrutura!
+      case _Protocol.evtMiss:
         if (len >= 15) {
           final int roundIdx          = data.getUint8(0);
           final int attempt           = data.getUint8(1);
-          final int rawPodId          = data.getUint8(2); // HIT: Pod correto | MISS: Pod errado (ou 255)
+          final int rawPodId          = data.getUint8(2);
+
           final int normalizedPodId   = (rawPodId == 255) ? 255 : (rawPodId + 1);
+          final int errorTypeResolved    = (rawPodId == 255) ? 2 : 1; // 2 = Timeout, 1 = Wrong Sensor
 
           final int rxTime            = data.getUint32(3, Endian.big);
           final int startTS           = data.getUint32(7, Endian.big);
@@ -433,6 +431,7 @@ class _FrameParser {
           final int bleDelta   = digElapsed - hwElapsed;
 
           if (kDebugMode) {
+            debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
             debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID: $normalizedPodId');
             debugPrint('Tempo Reação: ${rxTime}ms');
             debugPrint('🚨 BLE delta:  ${bleDelta}ms');
@@ -441,13 +440,14 @@ class _FrameParser {
 
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
-            mode:          roundIdx,
-            sensorId:      normalizedPodId,
-            errorType:     rawPodId == 255 ? 2 : 1, // 0=Acerto, 1=Erro, 2=Timeout
+            roundnum:      roundIdx,
+            attempt:       attempt,
+            sensorId:      0,
             wrongSensorId: normalizedPodId,
+            errorType:     errorTypeResolved,
             stimuliStart:  startTS,
             stimuliEnd:    endTS,
-            reactionTime:  rxTime, // Mapeado diretamente e com precisão!
+            reactionTime:  rxTime,
           ));
         }
         break;
@@ -768,8 +768,7 @@ class AppBluetoothService {
     _pressureCache = Int32List(_Protocol.pressureSensors);
     _pressureController.add(_pressureCache);
     _eventController.add(SensorEvent(
-      type: SensorEventType.end, sensorId: 0, mode: 0,
-      totalMs: 0, hits: 0, misses: 0,
+      type: SensorEventType.end,
     ));
   }
 

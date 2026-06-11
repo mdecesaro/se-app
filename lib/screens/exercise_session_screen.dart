@@ -52,16 +52,22 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   int _hits = 0;
   int _misses = 0;
   int _totalSessionMs = 0;
-  int _currentRound = 1;
 
-  // 🔥 CORREÇÃO: Mudado de int para Set<int> para aguentar múltiplos alvos simultâneos
+  // 🧠 Estruturas de Estado Locais (Sincronizadas com o Novo Modelo)
   final Set<int> _activeTargets = {};
-  Map<int, String> _activeDistractors = {};
-  String _correctColor = "#${0xffffff.toRadixString(16)}";
+  final Map<int, String> _activeDistractors = {}; // ID -> HexColor
+  String _correctColor = "#00FF00";
+
+  // 📸 SNAPSHOT BLINDADO: Cache estável dos estímulos para gravação no banco
+  List<int> _currentAttemptTargets = [];
+  String _currentAttemptTargetColor = "#00FF00";
+  List<int> _currentAttemptDistractors = [];
+  List<String> _currentAttemptDistractorColors = [];
+
   List<EvaluationResult> _results = [];
   bool _isFinished = false;
   bool _isWaitingForSet = false;
-  int _countdownValue = -1; // -1 means no countdown
+  int _countdownValue = -1;
   String? _athleteName;
   int? _athleteId;
   String? _sessionGuid;
@@ -93,7 +99,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       final db = await DatabaseService().database;
       final List<Map<String, dynamic>> maps = await db.query('sensors');
 
-      // 1. Imprime a quantidade bruta de linhas retornadas pelo banco
       debugPrint('=== 📂 [DATABASE] LENDO TABELA SENSORS ===');
       debugPrint('Total de registros encontrados no SQLite: ${maps.length}');
 
@@ -104,7 +109,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         final String sector = m['sector'] ?? "unknown";
         final String expectedFoot = m['expected_foot'] ?? "unknown";
 
-        // 2. Log detalhado linha por linha para inspecionar os IDs e Pés Esperados
         debugPrint('  📍 Carregado -> ID Físico (sensor): $sensorId | Setor: $sector | Pé Esperado: $expectedFoot');
 
         if (sensorId != null) {
@@ -122,7 +126,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _sensorDefinitions = loadedSensors;
       });
 
-      // 3. Resumo final da estrutura na memória da Screen
       debugPrint('✅ [LOAD COMPLETE] _sensorDefinitions populado com ${_sensorDefinitions.length} sensores.');
       debugPrint('=========================================');
 
@@ -153,9 +156,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isWaitingForSet = false;
       _hits = 0;
       _misses = 0;
-      _currentRound = 1;
-     _activeTargets.clear();
-      _activeDistractors = {};
+      _activeTargets.clear();
+      _activeDistractors.clear();
+      _currentAttemptTargets.clear();
+      _currentAttemptDistractors.clear();
+      _currentAttemptDistractorColors.clear();
       _countdownValue = -1;
     });
     _addLog("⚠️ Connection Reset - Session Cleared");
@@ -179,17 +184,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       case SensorEventType.countdown:
         setState(() {
           _isWaitingForSet = false;
-          _countdownValue = event.mode;
+          _countdownValue = event.countdownValue;
         });
-        _addLog("⏳ Countdown Sync: ${event.mode}");
+        _addLog("⏳ Countdown Sync: ${event.countdownValue}");
         break;
 
       case SensorEventType.animationStep:
-        if (_countdownValue != event.mode) {
+        if (_countdownValue != event.countdownValue) {
           setState(() {
-            _countdownValue = event.mode;
+            _countdownValue = event.countdownValue;
           });
-          _addLog("⏳ Step: ${event.mode}");
+          _addLog("⏳ Step: ${event.countdownValue}");
         }
         break;
 
@@ -204,7 +209,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
           _activeTargets.clear();
           _activeDistractors.clear();
 
-          // Extrai a cor mestra enviada pelo parser
+          // Extração segura da cor ativa principal
           final color = event.color;
           if (color != null && color.length >= 3) {
             _correctColor = '#${color[0].toRadixString(16).padLeft(2, '0')}'
@@ -212,52 +217,65 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                 '${color[2].toRadixString(16).padLeft(2, '0')}';
           }
 
-          // 🔥 CORREÇÃO CRÍTICA: Desempacota múltiplos alvos vindos do color payload (do índice 3 em diante)
+          // Popula os Alvos Ativos vindos do Firmware
           if (color != null && color.length > 3) {
             for (int i = 3; i < color.length; i++) {
-              _activeTargets.add(color[i]); // Já estão humanizados (+1) condizentes com o banco/painter
+              _activeTargets.add(color[i]);
             }
           } else if (event.sensorId > 0) {
             _activeTargets.add(event.sensorId);
           }
 
-          // Armazena os distratores mapeando IDs humanizados perfeitamente
           if (event.distractors != null) {
-            _activeDistractors = Map<int, String>.from(event.distractors!);
+            _activeDistractors.addAll(Map<int, String>.from(event.distractors!));
           }
+
+          // 📸 Tira a fotografia estável dos estímulos para proteger do clearScreen assíncrono
+          _currentAttemptTargets = _activeTargets.toList();
+          _currentAttemptTargetColor = _correctColor;
+          _currentAttemptDistractors = _activeDistractors.keys.toList();
+          _currentAttemptDistractorColors = _activeDistractors.values.toList();
         });
         _addLog("Targets ON: Sensors ${_activeTargets.join(', ')}");
         break;
+
       case SensorEventType.clearScreen:
         setState(() {
           _activeTargets.clear();
-          _activeDistractors = {};
+          _activeDistractors.clear();
         });
         _addLog("❌ Targets OFF");
         break;
+
       case SensorEventType.hit:
-        _recordResult(_currentRound, event.sensorId, event.reactionTime ?? 0,
-            isHit: true,
+      // O teu parser já entrega o sensorId normalizado e correto (1-14)
+        _recordResult(
+            round: event.roundnum,
+            attempt: event.attempt,
+            hitSensorId: event.sensorId,
+            reactionTimeMs: event.reactionTime ?? 0,
+            errorType: 0, // 0 = Sucesso
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
 
         setState(() {
           _hits++;
-          _currentRound++;
-
           _activeTargets.clear();
-          _activeDistractors = {};
+          _activeDistractors.clear();
         });
 
         _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
         break;
 
       case SensorEventType.miss:
-        _recordResult(_currentRound, event.sensorId, 0,
-            isHit: false,
-            errType: event.errorType ?? 1,
-            wrongSensorId: event.wrongSensorId ?? 0,
+      // O teu parser já mastiga o wrongSensorId (0 p/ timeout ou 1-14 p/ pod errado) e errorType (1 ou 2)
+        _recordResult(
+            round: event.roundnum,
+            attempt: event.attempt,
+            hitSensorId: event.wrongSensorId ?? 0,
+            reactionTimeMs: event.reactionTime ?? 0,
+            errorType: event.errorType ?? 1,
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
@@ -265,11 +283,11 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() {
           _misses++;
           _activeTargets.clear();
-          _activeDistractors = {};
+          _activeDistractors.clear();
         });
 
-        final String errorName = event.errorType == 2 ? 'TIMEOUT' : 'WRONG';
-        _addLog("MISS! [$errorName] at Sensor ${event.sensorId}");
+        final String errorName = event.errorType == 2 ? 'TIMEOUT' : 'WRONG SENSOR';
+        _addLog("MISS! [$errorName] at Pod: ${event.wrongSensorId}");
         break;
 
       case SensorEventType.end:
@@ -293,10 +311,16 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _hits = 0;
         _misses = 0;
         _totalSessionMs = 0;
-        _currentRound = 1;
         _results = [];
         _activeTargets.clear();
-        _activeDistractors = {};
+        _activeDistractors.clear();
+
+        // Reset do cache seguro de telemetria
+        _currentAttemptTargets = [];
+        _currentAttemptTargetColor = params['target_rgb_hex'] ?? "#00FF00";
+        _currentAttemptDistractors = [];
+        _currentAttemptDistractorColors = [];
+
         _sessionGuid = "${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999)}";
         formattedTime = "00:00.0";
         _correctColor = params['target_rgb_hex'] ?? "#00FF00";
@@ -304,7 +328,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _addLog("➡️ Sending Binary Configuration...");
       });
 
-      debugPrint('[SESSION] Starting game with params: $params');
       if (_bluetoothService.connectedDevice == null) {
         _addLog("⚠️ Pod disconnected. Reconnect before starting.");
         setState(() => _isSessionStarted = false);
@@ -370,7 +393,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isSessionStarted = false;
       _isFinished = true;
       _activeTargets.clear();
-      _activeDistractors = {};
+      _activeDistractors.clear();
     });
     _saveResultsToDatabase();
   }
@@ -380,8 +403,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       dynamic data = widget.exercise.parameters;
       if (data is String) data = json.decode(data);
       final params = data['parameters'] ?? {};
-
-      final hitsList = _results.where((r) => r.error == 0).toList();
+      final hitsList = _results.where((r) => r.errorType == 0).toList();
       double avgRT = hitsList.isEmpty
           ? 0.0
           : hitsList.map((e) => e.reactionTime).reduce((a, b) => a + b) / hitsList.length;
@@ -394,33 +416,23 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         'platform_version': _bluetoothService.firmwareVersion,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'session_guid': _sessionGuid,
-
-        // Dados de Configuração Básica do Jogo
         'game_mode': params['game_mode'] ?? 1,
         'execution_rounds': params['game_rounds'] ?? 1,
         'total_attempts': _hits + _misses,
         'timeout_ms': params['timeout_ms'] ?? 0,
         'repeat_if_wrong': (params['repeat_if_wrong'] == true) ? 1 : 0,
-
-        // Configuração de Delays
         'delay_type': params['delay_type']?.toString() ?? '1',
         'delay_min_ms': params['delay_min_ms'] ?? 500,
         'delay_max_ms': params['delay_max_ms'] ?? 500,
-
-        // Configuração de Alvos (Targets)
         'target_logic': params['target_logic'] ?? 1,
         'target_qty': params['target_qty'] ?? 10,
         'target_rgb_hex': params['target_rgb_hex'] ?? "#00FF00",
-
-        // Configuração de Distratores
         'dist_mode': params['dist_mode'] ?? 0,
         'dist_behavior': params['dist_behavior'] ?? 0,
         'dist_qty': params['dist_qty'] ?? 0,
         'dist_rgbs_hex': (params['dist_rgbs_hex'] is List)
-            ? json.encode(params['dist_rgbs_hex']) // Transforma a lista de string em JSON TEXT para o SQLite
+            ? json.encode(params['dist_rgbs_hex'])
             : json.encode([]),
-
-        // Resultados Globais Consolidados da Sessão
         'hits': _hits,
         'errors': _misses,
         'avg_reaction_time': avgRT,
@@ -450,42 +462,28 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     });
   }
 
-  void _recordResult(int round, int sensorId, int reactionTimeMs,
-      {required bool isHit, int errType = 0, int wrongSensorId = 0, int stimuliStart = 0, int stimuliEnd = 0}) {
-
-    final sensorDef = _sensorDefinitions.firstWhere(
-          (s) => s.id == sensorId,
-      orElse: () => SensorDefinition(
-        id: sensorId,
-        x: 0,
-        y: 0,
-        sector: sensorId == 255 ? "Timeout" : "unknown",
-        expectedFoot: sensorId == 255 ? "None" : "unknown",
-      ),
-    );
-
-    // 🎯 LOG DE VALIDAÇÃO CRUCIAL (Pode apagar depois que comemorar o sucesso)
-    debugPrint('--------------------------------------------------');
-    debugPrint('💾 [SQLITE PRE-SAVE LOG] Round #$round');
-    debugPrint('👉 ID Recebido do Parser: $sensorId');
-    debugPrint('📍 Setor Localizado no DB: ${sensorDef.sector}');
-    debugPrint('🦵 Pé Vinculado no DB: ${sensorDef.expectedFoot}');
-    debugPrint('⏱️ Tempo de Reação: ${reactionTimeMs}ms | Status: ${isHit ? "✅ HIT" : "❌ MISS"}');
-    debugPrint('--------------------------------------------------');
-
+  void _recordResult({
+    required int round,
+    required int attempt,
+    required int hitSensorId,
+    required int reactionTimeMs,
+    required int errorType,
+    required int stimuliStart,
+    required int stimuliEnd
+  }) {
+    // ✅ Consome a partir do Cache de Snapshot Seguro em vez das variáveis voláteis do UI Canvas.
     final result = EvaluationResult(
       roundNum: round,
-      stimulusId: sensorId,
-      wrongSensorId: wrongSensorId,
-      stimulusPosition: sensorDef.sector,
-      stimulusType: "color",
-      correctColor: _correctColor,
-      reactionTime: reactionTimeMs,
+      attemptNum: attempt,
       stimulusStart: stimuliStart,
       stimulusEnd: stimuliEnd,
-      error: isHit ? 0 : errType,
-      footUsed: sensorDef.expectedFoot,
-      distractorIdColor: _activeDistractors.entries.map((e) => {'id': e.key, 'color': e.value}).toList(),
+      reactionTime: reactionTimeMs,
+      targets: _currentAttemptTargets,
+      targetColorHex: _currentAttemptTargetColor,
+      distractors: _currentAttemptDistractors,
+      distractorColorsHex: _currentAttemptDistractorColors,
+      hitSensorId: hitSensorId,
+      errorType: errorType,
     );
 
     _results.add(result);
@@ -700,7 +698,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                   painter: MatPainter(
                     sensors: _sensorDefinitions,
                     values: values,
-                    activeTargets: _activeTargets, // 🔥 Passa o Set de múltiplos alvos atualizado
+                    activeTargets: _activeTargets,
                     correctColor: _correctColor,
                     distractors: _activeDistractors,
                   ),
@@ -714,10 +712,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   }
 
   Widget _buildStatsBar() {
-    final hits = _results.where((r) => r.error == 0).length;
-    double avgRT = hits == 0
+    final hitsList = _results.where((r) => r.errorType == 0).toList();
+    double avgRT = hitsList.isEmpty
         ? 0
-        : _results.where((r) => r.error == 0).map((e) => e.reactionTime).reduce((a, b) => a + b) / hits;
+        : hitsList.map((e) => e.reactionTime).reduce((a, b) => a + b) / hitsList.length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -755,7 +753,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 class MatPainter extends CustomPainter {
   final List<SensorDefinition> sensors;
   final List<int> values;
-  final Set<int> activeTargets; // 🔥 CORREÇÃO: Mudado de int para Set<int> para dar suporte à renderização múltipla
+  final Set<int> activeTargets;
   final String correctColor;
   final Map<int, String> distractors;
 
@@ -794,11 +792,9 @@ class MatPainter extends CustomPainter {
     for (var sensor in sensors) {
       final pos = Offset(center.dx + (sensor.x * scale), center.dy + (sensor.y * scale));
 
-      // Mapeamento puro de pressão física baseado na fiação do sensor (id 1 mapeia índice 0)
       int val = sensor.id <= values.length ? values[sensor.id - 1] : 0;
       bool isPressed = val > 100;
 
-      // 🔥 CORREÇÃO VISUAL: Checa se o ID humanizado do banco está contido no Set de alvos ativos
       bool isTarget = activeTargets.contains(sensor.id);
       bool isDistractor = distractors.containsKey(sensor.id);
 
@@ -807,7 +803,6 @@ class MatPainter extends CustomPainter {
         activeColor = parseColor(distractors[sensor.id]!, Colors.red);
       }
 
-      // 1. Desenha o Hexágono do Pod
       final hexPaint = Paint()
         ..color = isPressed
             ? activeColor.withOpacity((val / 1023.0).clamp(0.4, 0.9))
@@ -825,7 +820,6 @@ class MatPainter extends CustomPainter {
 
       _drawHex(canvas, pos, hexSize, hexPaint, hexOutlinePaint);
 
-      // 2. Desenha a barra do LED físico do Pod
       final rectPaint = Paint()
         ..color = (isTarget || isDistractor)
             ? activeColor
@@ -840,7 +834,6 @@ class MatPainter extends CustomPainter {
         height: rectHeight,
       );
 
-      // Efeito Glow nos LEDs ativos (Alvos e Distratores)
       if (isTarget || isDistractor) {
         final shadowPaint = Paint()
           ..color = activeColor.withOpacity(0.4)
@@ -864,7 +857,6 @@ class MatPainter extends CustomPainter {
           rectPaint
       );
 
-      // 3. Número do Pod
       final textPainter = TextPainter(
         text: TextSpan(
           text: '${sensor.id}',

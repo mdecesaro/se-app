@@ -54,7 +54,7 @@ class _MainScreenState extends State<MainScreen> {
   final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final _key = GlobalKey<ScaffoldState>();
   Athlete? _currentAthlete;
-  Map<String, double> _athleteStats = {
+  final Map<String, double> _athleteStats = {
     'Reaction': 0,
     'Agility': 0,
     'Balance': 0,

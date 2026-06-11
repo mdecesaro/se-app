@@ -1,11 +1,12 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 // Mocking the behavior of _parseBuffer from AppBluetoothService
 class Parser {
+  // ignore: constant_identifier_names
   static const int SOF = 0xAA;
+  // ignore: constant_identifier_names
   static const int MAX_BUFFER_CAPACITY = 1024;
   final Uint8List _incomingBuffer = Uint8List(MAX_BUFFER_CAPACITY);
   int _bufferLen = 0;
@@ -34,7 +35,9 @@ class Parser {
         if (_bufferLen - cursor < totalLen) break;
 
         int crc = 0;
-        for (int i = 0; i < totalLen; i++) crc ^= _incomingBuffer[cursor + i];
+        for (int i = 0; i < totalLen; i++) {
+          crc ^= _incomingBuffer[cursor + i];
+        }
 
         if (crc == 0) {
           binaryPackets.add({
@@ -112,7 +115,9 @@ void main() {
       frame[2] = payload.length;
       frame.setRange(3, 3 + payload.length, payload);
       int crc = 0;
-      for (int i = 0; i < frame.length - 1; i++) crc ^= frame[i];
+      for (int i = 0; i < frame.length - 1; i++) {
+        crc ^= frame[i];
+      }
       frame[frame.length - 1] = crc;
 
       for (int i = 0; i < frame.length; i += 2) {

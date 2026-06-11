@@ -11,7 +11,6 @@ class MeScreen extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -213,8 +212,6 @@ class FifaCard extends StatelessWidget {
     final double cardWidth = isCompact ? 170 : 300;
     final double ratingSize = isCompact ? 32 : 54;
     final double nameSize = isCompact ? 12 : 22;
-    final double statValueSize = isCompact ? 16 : 24;
-    final double statLabelSize = isCompact ? 7 : 10;
     final double imageHeight = isCompact ? 80 : 180;
 
     return Container(
