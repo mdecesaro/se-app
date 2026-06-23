@@ -9,7 +9,8 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, clearScreen, ack, nack }
+// ✂️ REMOVIDO: clearScreen removido do ciclo de vida dos eventos de sensores
+enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, ack, nack }
 
 class SensorEvent {
   SensorEvent({
@@ -18,6 +19,7 @@ class SensorEvent {
     this.attempt = 0,
     this.sensorId = 0,
     this.reactionTime,
+    this.gct,
     this.errorType,
     this.wrongSensorId,
     this.countdownValue = 0,
@@ -36,6 +38,7 @@ class SensorEvent {
   final int               attempt;
   final int               sensorId;
   final int?              reactionTime;
+  final int?              gct;
   final int?              errorType;
   final int?              wrongSensorId;
   final int               countdownValue;
@@ -65,8 +68,11 @@ abstract final class _Protocol {
   static const int msgAck         = 0x06;
   static const int msgNack        = 0x15;
 
+  // Resposta oficial de Handshake Aceito vinda do Arduino
+  static const int resConnectSuccess = 0x81;
+
   // Event codes (device → host)
-  static const int evtClearScreen      = 0x1A;
+  // ✂️ REMOVIDO: evtClearScreen (0x1A) deletado do escopo do protocolo
   static const int evtOn               = 0x10;
   static const int evtHit              = 0x11;
   static const int evtMiss             = 0x12;
@@ -132,7 +138,6 @@ class _FrameParser {
     _pIdx         = 0;
     _handshakeDone = false;
 
-    // ✅ CORREÇÃO: Limpa de forma segura as âncoras temporais no reset do jogo
     _firstHardwareEndTS   = null;
     _firstDigitalTimestamp = null;
   }
@@ -179,19 +184,9 @@ class _FrameParser {
 
       if (byte == _Protocol.msgAck || byte == _Protocol.msgNack) {
         final bool isAck = (byte == _Protocol.msgAck);
-        if (isAck && !_handshakeDone) {
-          final result = _tryParseHandshake(cursor);
-
-          if (result is _HandshakeSuccess) {
-            _handshakeDone = true;
-            cursor += result.consumed;
-            continue;
-          }
-          if (result is _HandshakeFragment) break;
-        }
         onLine(isAck ? 'ACK' : 'NACK');
         onEvent(SensorEvent(
-          type: isAck ? SensorEventType.ack : SensorEventType.nack));
+            type: isAck ? SensorEventType.ack : SensorEventType.nack));
         cursor++;
         continue;
       }
@@ -199,17 +194,11 @@ class _FrameParser {
       if (byte == _Protocol.sof) {
         final remaining = _len - cursor;
 
-        if (remaining >= 2 && _buf[cursor + 1] == _Protocol.evtClearScreen) {
-          if (kDebugMode) debugPrint('[FW RX] EVT_SCREEN_CLEAR | AA 1A');
-          onEvent(SensorEvent(
-            type:SensorEventType.clearScreen)
-          );
-          cursor += 2;
-          continue;
-        }
+        // ✂️ REMOVIDO: Bloco completo de interceptação e atalho do AA 1A (Clear Screen) removido
 
         if (remaining < 4) break;
 
+        final cmdId      = _buf[cursor + 1];
         final payloadLen = _buf[cursor + 2];
         final totalLen   = 3 + payloadLen + 1;
         if (remaining < totalLen) break;
@@ -220,7 +209,21 @@ class _FrameParser {
         }
 
         if (crc == 0) {
-          _handleBinaryPacket(_buf[cursor + 1], cursor + 3, payloadLen);
+          if (cmdId == _Protocol.resConnectSuccess && !_handshakeDone) {
+            final result = _tryParseHandshake(cursor);
+
+            if (result is _HandshakeSuccess) {
+              _handshakeDone = true;
+              cursor += result.consumed;
+              continue;
+            }
+            if (result is _HandshakeFragment) break;
+
+            cursor += totalLen;
+            continue;
+          }
+
+          _handleBinaryPacket(cmdId, cursor + 3, payloadLen);
           cursor += totalLen;
         } else {
           cursor = _findNextValidSof(cursor + 1);
@@ -364,24 +367,23 @@ class _FrameParser {
         break;
 
       case _Protocol.evtHit:
-        if (len >= 15) { // 1(round) + 1(attempt) + 1(pod) + 4(rt) + 4(start) + 4(end) = 15 bytes
+        if (len >= 17) {
           final int roundIdx = data.getUint8(0);
           final int attempt  = data.getUint8(1);
           final int podId    = data.getUint8(2);
 
-          // Firmware (0-13) -> Flutter (1-14)
           final int normalizedPodId = podId + 1;
 
           final int rt      = data.getUint32(3, Endian.big);
           final int startTS = data.getUint32(7, Endian.big);
           final int endTS   = data.getUint32(11, Endian.big);
+          final int gct     = data.getUint16(15, Endian.big);
 
           if (_firstHardwareEndTS == null) {
             _firstHardwareEndTS = endTS;
             _firstDigitalTimestamp = nowDigital;
           }
 
-          // Rollover-safe subtraction for 32-bit unsigned timestamps
           final int hwElapsed  = (endTS - _firstHardwareEndTS!) & 0xFFFFFFFF;
           final int digElapsed = nowDigital - _firstDigitalTimestamp!;
           final int bleDelta   = digElapsed - hwElapsed;
@@ -390,8 +392,7 @@ class _FrameParser {
             debugPrint('=== BLE TRANSPORT DELTA (HIT) ===');
             debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $normalizedPodId');
             debugPrint('Reaction Time (hw): ${rt}ms');
-            debugPrint('Round hw elapsed:   ${hwElapsed}ms');
-            debugPrint('Round dig elapsed:  ${digElapsed}ms');
+            debugPrint('GCT:               ${gct}ms');
             debugPrint('🚨 BLE delta:       ${bleDelta}ms');
             debugPrint('=================================');
           }
@@ -402,6 +403,7 @@ class _FrameParser {
             attempt:      attempt,
             sensorId:     normalizedPodId,
             reactionTime: rt,
+            gct:          gct,
             stimuliStart: startTS,
             stimuliEnd:   endTS,
           ));
@@ -409,17 +411,18 @@ class _FrameParser {
         break;
 
       case _Protocol.evtMiss:
-        if (len >= 15) {
+        if (len >= 17) {
           final int roundIdx          = data.getUint8(0);
           final int attempt           = data.getUint8(1);
           final int rawPodId          = data.getUint8(2);
 
           final int normalizedPodId   = (rawPodId == 255) ? 255 : (rawPodId + 1);
-          final int errorTypeResolved    = (rawPodId == 255) ? 2 : 1; // 2 = Timeout, 1 = Wrong Sensor
+          final int errorTypeResolved    = (rawPodId == 255) ? 2 : 1;
 
           final int rxTime            = data.getUint32(3, Endian.big);
           final int startTS           = data.getUint32(7, Endian.big);
           final int endTS             = data.getUint32(11, Endian.big);
+          final int gct               = data.getUint16(15, Endian.big);
 
           if (_firstHardwareEndTS == null) {
             _firstHardwareEndTS = endTS;
@@ -434,6 +437,7 @@ class _FrameParser {
             debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
             debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID: $normalizedPodId');
             debugPrint('Tempo Reação: ${rxTime}ms');
+            debugPrint('GCT: ${gct}ms');
             debugPrint('🚨 BLE delta:  ${bleDelta}ms');
             debugPrint('==================================');
           }
@@ -448,6 +452,7 @@ class _FrameParser {
             stimuliStart:  startTS,
             stimuliEnd:    endTS,
             reactionTime:  rxTime,
+            gct:           gct,
           ));
         }
         break;
@@ -460,16 +465,18 @@ class _FrameParser {
   }
 
   _HandshakeResult _tryParseHandshake(int start) {
-    if (_len - start <= 1) return _HandshakeInvalid();
+    final payloadLen = _buf[start + 2];
+    final totalLen   = 3 + payloadLen + 1;
 
     try {
-      int pos = start + 1;
+      int pos = start + 3;
+      int endOfPayload = start + 3 + payloadLen;
 
       String? readStr() {
-        if (pos >= _len) return null;
+        if (pos >= endOfPayload) return null;
         final strLen = _buf[pos];
         if (strLen == 0 || strLen > 64) throw 'Invalid string length';
-        if (_len < pos + 1 + strLen) return null;
+        if (endOfPayload < pos + 1 + strLen) return null;
         pos++;
         final s = utf8.decode(Uint8List.sublistView(_buf, pos, pos + strLen));
         pos += strLen;
@@ -479,10 +486,7 @@ class _FrameParser {
       final deviceId = readStr();
       if (deviceId == null) return _HandshakeFragment();
 
-      if (pos >= _len) return _HandshakeFragment();
-      pos++;
-
-      if (pos >= _len) return _HandshakeFragment();
+      if (pos >= endOfPayload) return _HandshakeFragment();
       final podCount = _buf[pos++];
 
       final version = readStr();
@@ -493,7 +497,8 @@ class _FrameParser {
 
       onHandshake(deviceId, podCount, version);
       if (kDebugMode) debugPrint('[BLE] Handshake OK — device: $deviceId  pods: $podCount  fw: $version');
-      return _HandshakeSuccess(pos - start);
+
+      return _HandshakeSuccess(totalLen);
     } catch (_) {
       return _HandshakeInvalid();
     }
@@ -670,7 +675,6 @@ class AppBluetoothService {
 
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
-      // 🚀 PRIORIDADE MÁXIMA NO ANDROID
       try {
         if (Platform.isAndroid) {
           debugPrint('[BLE] Forçando prioridade de conexão máxima (High Performance) no Android...');
@@ -790,8 +794,9 @@ class AppBluetoothService {
     required int          delayMaxMs,
     required int          timeoutMs,
     required bool         repeatIfWrong,
+    required int          missPolicy,
   }) async {
-    final payload = ByteData(28);
+    final payload = ByteData(29);
 
     payload.setUint8(0, gameMode);
     payload.setUint8(1, gameRounds);
@@ -824,19 +829,20 @@ class AppBluetoothService {
     payload.setUint16(23, delayMaxMs,   Endian.little);
     payload.setUint16(25, timeoutMs,    Endian.little);
     payload.setUint8(27,  repeatIfWrong ? 1 : 0);
+    payload.setUint8(28, missPolicy);
 
-    final rawBytes = payload.buffer.asUint8List(0, 28);
+    final rawBytes = payload.buffer.asUint8List(0, 29);
 
-    assert(rawBytes.length == 28, 'CRITICAL: Outbound BLE payload must be exactly 28 bytes!');
+    assert(rawBytes.length == 29, 'CRITICAL: Outbound BLE payload must be exactly 29 bytes!');
 
-    if (rawBytes.length != 28) {
+    if (rawBytes.length != 29) {
       if (kDebugMode) debugPrint('[BLE TX ERROR] Blocked malformed payload size: ${rawBytes.length}B');
       return;
     }
 
     if (kDebugMode) {
       final hexString = rawBytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
-      debugPrint('[BLE TX] Dispatched Verified 28B Payload: $hexString');
+      debugPrint('[BLE TX] Dispatched Verified 29B Payload: $hexString');
     }
 
     await _sendBinaryPacket(_Protocol.cmdSetGame, rawBytes);

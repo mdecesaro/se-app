@@ -4,6 +4,7 @@ class EvaluationResult {
   final int stimulusStart;
   final int stimulusEnd;
   final int reactionTime;
+  final int gct;
   final List<int> targets;          // IDs dos alvos ativos, ex: [1, 10, 5]
   final String targetColorHex;            // Cor dos alvos, ex: "#00FF00"
   final List<int> distractors;      // IDs dos distratores ativos, ex: [11, 4, 6] (vazia se não houver)
@@ -17,6 +18,7 @@ class EvaluationResult {
     required this.stimulusStart,
     required this.stimulusEnd,
     required this.reactionTime,
+    required this.gct,
     required this.targets,
     required this.targetColorHex,
     required this.distractors,
@@ -32,6 +34,7 @@ class EvaluationResult {
       'stimulus_start': stimulusStart,
       'stimulus_end': stimulusEnd,
       'reaction_time': reactionTime,
+      'gct': gct,
       'targets': targets.join(','),
       'target_color_hex': targetColorHex,
       'distractors': distractors.join(','),
@@ -48,6 +51,7 @@ class EvaluationResult {
       stimulusStart: map['stimulus_start'] as int,
       stimulusEnd: map['stimulus_end'] as int,
       reactionTime: map['reaction_time'] as int,
+      gct: map['gct'] as int,
       targets: (map['targets'] as String).split(',').map(int.parse).toList(),
       targetColorHex: map['target_color_hex'] as String,
       distractors: (map['distractors'] as String).isEmpty

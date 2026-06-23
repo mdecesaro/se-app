@@ -53,9 +53,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   int _misses = 0;
   int _totalSessionMs = 0;
 
-  // 🧠 Estruturas de Estado Locais (Sincronizadas com o Novo Modelo)
-  final Set<int> _activeTargets = {};
-  final Map<int, String> _activeDistractors = {}; // ID -> HexColor
+  // 🧠 Estruturas de Estado Locais (Removido 'final' para permitir quebra de referência)
+  Set<int> _activeTargets = {};
+  Map<int, String> _activeDistractors = {}; // ID -> HexColor
   String _correctColor = "#00FF00";
 
   // 📸 SNAPSHOT BLINDADO: Cache estável dos estímulos para gravação no banco
@@ -156,8 +156,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _isWaitingForSet = false;
       _hits = 0;
       _misses = 0;
-      _activeTargets.clear();
-      _activeDistractors.clear();
+      _activeTargets = {};
+      _activeDistractors = {};
       _currentAttemptTargets.clear();
       _currentAttemptDistractors.clear();
       _currentAttemptDistractorColors.clear();
@@ -205,19 +205,29 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.on:
-        setState(() {
-          _activeTargets.clear();
-          _activeDistractors.clear();
+      // 🧪 TELEMETRIA DE ENTRADA (Console do Desenvolvedor)
+        debugPrint("=========================================================");
+        debugPrint("🟢 [BLUETOOTH INCOMING] Evento ON Recebido!");
+        debugPrint("  -> event.sensorId bruto: ${event.sensorId}");
+        debugPrint("  -> event.color raw list: ${event.color}");
+        debugPrint("  -> event.distractors map: ${event.distractors}");
+        debugPrint("=========================================================");
 
-          // Extração segura da cor ativa principal
+        setState(() {
+          // ✅ Nova instância força a mudança de referência para o shouldRepaint
+          _activeTargets = {};
+          _activeDistractors = {};
+
+          // 1. Decodificação da Cor do Alvo Principal
           final color = event.color;
           if (color != null && color.length >= 3) {
             _correctColor = '#${color[0].toRadixString(16).padLeft(2, '0')}'
                 '${color[1].toRadixString(16).padLeft(2, '0')}'
-                '${color[2].toRadixString(16).padLeft(2, '0')}';
+                '${color[2].toRadixString(16).padLeft(2, '0')}'.toUpperCase();
+            debugPrint("🎨 Cor do Alvo Decodificada: $_correctColor");
           }
 
-          // Popula os Alvos Ativos vindos do Firmware
+          // 2. Extração dos IDs dos Alvos
           if (color != null && color.length > 3) {
             for (int i = 3; i < color.length; i++) {
               _activeTargets.add(color[i]);
@@ -225,75 +235,78 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
           } else if (event.sensorId > 0) {
             _activeTargets.add(event.sensorId);
           }
+          debugPrint("🎯 IDs dos Alvos Ativados no Estado: $_activeTargets");
 
+          // 3. Extração dos Distratores
           if (event.distractors != null) {
             _activeDistractors.addAll(Map<int, String>.from(event.distractors!));
           }
+          debugPrint("👾 Distratores Ativados no Estado: $_activeDistractors");
 
-          // 📸 Tira a fotografia estável dos estímulos para proteger do clearScreen assíncrono
+          // 📸 Atualiza o Snapshot Blindado para o Banco
           _currentAttemptTargets = _activeTargets.toList();
           _currentAttemptTargetColor = _correctColor;
           _currentAttemptDistractors = _activeDistractors.keys.toList();
           _currentAttemptDistractorColors = _activeDistractors.values.toList();
         });
-        _addLog("Targets ON: Sensors ${_activeTargets.join(', ')}");
-        break;
 
-      case SensorEventType.clearScreen:
-        setState(() {
-          _activeTargets.clear();
-          _activeDistractors.clear();
-        });
-        _addLog("❌ Targets OFF");
+        _addLog("Targets ON: Sensors ${_activeTargets.join(', ')}");
+        debugPrint("📱 FLUTTER UI: Estado atualizado e frame solicitado via setState.");
+        debugPrint("=========================================================");
         break;
 
       case SensorEventType.hit:
-      // O teu parser já entrega o sensorId normalizado e correto (1-14)
         _recordResult(
             round: event.roundnum,
             attempt: event.attempt,
             hitSensorId: event.sensorId,
             reactionTimeMs: event.reactionTime ?? 0,
-            errorType: 0, // 0 = Sucesso
+            gct: event.gct ?? 0,
+            errorType: 0,
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
 
+        _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
+
         setState(() {
           _hits++;
-          _activeTargets.clear();
-          _activeDistractors.clear();
+          // ✅ Substituição por nova instância limpa: força repintura imediata
+          _activeTargets = {};
+          _activeDistractors = {};
         });
-
-        _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
         break;
 
       case SensorEventType.miss:
-      // O teu parser já mastiga o wrongSensorId (0 p/ timeout ou 1-14 p/ pod errado) e errorType (1 ou 2)
         _recordResult(
             round: event.roundnum,
             attempt: event.attempt,
             hitSensorId: event.wrongSensorId ?? 0,
             reactionTimeMs: event.reactionTime ?? 0,
+            gct: event.gct ?? 0,
             errorType: event.errorType ?? 1,
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
 
-        setState(() {
-          _misses++;
-          _activeTargets.clear();
-          _activeDistractors.clear();
-        });
-
         final String errorName = event.errorType == 2 ? 'TIMEOUT' : 'WRONG SENSOR';
         _addLog("MISS! [$errorName] at Pod: ${event.wrongSensorId}");
+
+        setState(() {
+          _misses++;
+          // ✅ Substituição por nova instância limpa: força repintura imediata
+          _activeTargets = {};
+          _activeDistractors = {};
+        });
         break;
 
       case SensorEventType.end:
         _totalSessionMs = stopwatch.elapsedMilliseconds;
         _addLog("🏁 Session Summary: ${event.hits} hits, ${event.misses} misses");
         _finishSession();
+        break;
+
+      default:
         break;
     }
   }
@@ -312,10 +325,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _misses = 0;
         _totalSessionMs = 0;
         _results = [];
-        _activeTargets.clear();
-        _activeDistractors.clear();
+        _activeTargets = {};
+        _activeDistractors = {};
 
-        // Reset do cache seguro de telemetria
         _currentAttemptTargets = [];
         _currentAttemptTargetColor = params['target_rgb_hex'] ?? "#00FF00";
         _currentAttemptDistractors = [];
@@ -352,6 +364,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         delayMaxMs: params['delay_max_ms'] ?? 500,
         timeoutMs: params['timeout_ms'] ?? 0,
         repeatIfWrong: params['repeat_if_wrong'] == true,
+        missPolicy: params['miss_policy'] ?? 0,
       );
     } catch (e) {
       _addLog("❌ Error starting session: $e");
@@ -392,8 +405,8 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     setState(() {
       _isSessionStarted = false;
       _isFinished = true;
-      _activeTargets.clear();
-      _activeDistractors.clear();
+      _activeTargets = {};
+      _activeDistractors = {};
     });
     _saveResultsToDatabase();
   }
@@ -467,17 +480,18 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     required int attempt,
     required int hitSensorId,
     required int reactionTimeMs,
+    required int gct,
     required int errorType,
     required int stimuliStart,
     required int stimuliEnd
   }) {
-    // ✅ Consome a partir do Cache de Snapshot Seguro em vez das variáveis voláteis do UI Canvas.
     final result = EvaluationResult(
       roundNum: round,
       attemptNum: attempt,
       stimulusStart: stimuliStart,
       stimulusEnd: stimuliEnd,
       reactionTime: reactionTimeMs,
+      gct: gct,
       targets: _currentAttemptTargets,
       targetColorHex: _currentAttemptTargetColor,
       distractors: _currentAttemptDistractors,
