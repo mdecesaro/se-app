@@ -146,6 +146,7 @@ class DatabaseService {
             stimulus_end INTEGER,
             reaction_time INTEGER,
             gct INTEGER,
+            delay_applied INTEGER,
             targets TEXT NOT NULL,                -- Ex: "1,10,5"
             target_color_hex TEXT NOT NULL,       -- Ex: "#00FF00"
             distractors TEXT NOT NULL,            -- Ex: "11,4,6" (ou "" se não houver)

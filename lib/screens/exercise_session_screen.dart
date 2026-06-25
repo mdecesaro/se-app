@@ -262,6 +262,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             hitSensorId: event.sensorId,
             reactionTimeMs: event.reactionTime ?? 0,
             gct: event.gct ?? 0,
+            delayApplied: event.delayApplied ?? false,
             errorType: 0,
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
@@ -284,6 +285,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             hitSensorId: event.wrongSensorId ?? 0,
             reactionTimeMs: event.reactionTime ?? 0,
             gct: event.gct ?? 0,
+            delayApplied: event.delayApplied ?? false,
             errorType: event.errorType ?? 1,
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
@@ -481,6 +483,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     required int hitSensorId,
     required int reactionTimeMs,
     required int gct,
+    required delayApplied,
     required int errorType,
     required int stimuliStart,
     required int stimuliEnd
@@ -492,6 +495,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       stimulusEnd: stimuliEnd,
       reactionTime: reactionTimeMs,
       gct: gct,
+      delayApplied: delayApplied,
       targets: _currentAttemptTargets,
       targetColorHex: _currentAttemptTargetColor,
       distractors: _currentAttemptDistractors,
