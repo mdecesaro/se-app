@@ -20,6 +20,7 @@ class SensorEvent {
     this.sensorId = 0,
     this.reactionTime,
     this.gct,
+    this.delayApplied,
     this.errorType,
     this.wrongSensorId,
     this.countdownValue = 0,
@@ -39,6 +40,7 @@ class SensorEvent {
   final int               sensorId;
   final int?              reactionTime;
   final int?              gct;
+  final int?              delayApplied;
   final int?              errorType;
   final int?              wrongSensorId;
   final int               countdownValue;
@@ -193,21 +195,29 @@ class _FrameParser {
 
       if (byte == _Protocol.sof) {
         final remaining = _len - cursor;
-
-        // ✂️ REMOVIDO: Bloco completo de interceptação e atalho do AA 1A (Clear Screen) removido
-
         if (remaining < 4) break;
 
         final cmdId      = _buf[cursor + 1];
         final payloadLen = _buf[cursor + 2];
         final totalLen   = 3 + payloadLen + 1;
+
+        debugPrint("[DEBUG BLE] Chegou SOF! Cmd: 0x${cmdId.toRadixString(16)}, Len: $payloadLen, Total Esperado: $totalLen, No Buffer: $remaining");
+
+        if (remaining < totalLen) {
+          debugPrint("[DEBUG BLE] Pacote incompleto no buffer. Aguardando mais bytes...");
+          break;
+        }
+
+
+
+
         if (remaining < totalLen) break;
 
         int crc = 0;
         for (int i = 0; i < totalLen; i++) {
           crc ^= _buf[cursor + i];
         }
-
+        debugPrint("[DEBUG BLE] Validação do CRC para Cmd 0x${cmdId.toRadixString(16)}: ${crc == 0 ? 'CORRETO (0)' : 'FALHOU ($crc)'}");
         if (crc == 0) {
           if (cmdId == _Protocol.resConnectSuccess && !_handshakeDone) {
             final result = _tryParseHandshake(cursor);
@@ -367,17 +377,18 @@ class _FrameParser {
         break;
 
       case _Protocol.evtHit:
-        if (len >= 17) {
+        if (len >= 19) {
           final int roundIdx = data.getUint8(0);
           final int attempt  = data.getUint8(1);
           final int podId    = data.getUint8(2);
 
           final int normalizedPodId = podId + 1;
 
-          final int rt      = data.getUint32(3, Endian.big);
-          final int startTS = data.getUint32(7, Endian.big);
-          final int endTS   = data.getUint32(11, Endian.big);
-          final int gct     = data.getUint16(15, Endian.big);
+          final int rt           = data.getUint32(3, Endian.big);
+          final int startTS      = data.getUint32(7, Endian.big);
+          final int endTS        = data.getUint32(11, Endian.big);
+          final int gct          = data.getUint16(15, Endian.big);
+          final int delayApplied = data.getUint16(17, Endian.big);
 
           if (_firstHardwareEndTS == null) {
             _firstHardwareEndTS = endTS;
@@ -393,7 +404,8 @@ class _FrameParser {
             debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $normalizedPodId');
             debugPrint('Reaction Time (hw): ${rt}ms');
             debugPrint('GCT:               ${gct}ms');
-            debugPrint('🚨 BLE delta:       ${bleDelta}ms');
+            debugPrint('Delay Applied:     ${delayApplied}ms');
+            debugPrint('🚨 BLE delta:      ${bleDelta}ms');
             debugPrint('=================================');
           }
 
@@ -404,6 +416,7 @@ class _FrameParser {
             sensorId:     normalizedPodId,
             reactionTime: rt,
             gct:          gct,
+            delayApplied: delayApplied,
             stimuliStart: startTS,
             stimuliEnd:   endTS,
           ));
@@ -411,7 +424,7 @@ class _FrameParser {
         break;
 
       case _Protocol.evtMiss:
-        if (len >= 17) {
+        if (len >= 19) {
           final int roundIdx          = data.getUint8(0);
           final int attempt           = data.getUint8(1);
           final int rawPodId          = data.getUint8(2);
@@ -423,6 +436,7 @@ class _FrameParser {
           final int startTS           = data.getUint32(7, Endian.big);
           final int endTS             = data.getUint32(11, Endian.big);
           final int gct               = data.getUint16(15, Endian.big);
+          final int delayApplied      = data.getUint16(17, Endian.big);
 
           if (_firstHardwareEndTS == null) {
             _firstHardwareEndTS = endTS;
@@ -438,6 +452,7 @@ class _FrameParser {
             debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID: $normalizedPodId');
             debugPrint('Tempo Reação: ${rxTime}ms');
             debugPrint('GCT: ${gct}ms');
+            debugPrint('Delay Applied:     ${delayApplied}ms');
             debugPrint('🚨 BLE delta:  ${bleDelta}ms');
             debugPrint('==================================');
           }
@@ -453,6 +468,7 @@ class _FrameParser {
             stimuliEnd:    endTS,
             reactionTime:  rxTime,
             gct:           gct,
+            delayApplied:  delayApplied,
           ));
         }
         break;
