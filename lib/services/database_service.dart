@@ -74,6 +74,11 @@ class DatabaseService {
     ''');
 
     await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_exercises_category_active 
+      ON exercises (category_id, active);
+    ''');
+
+    await db.execute('''
       CREATE TABLE movement_ranges (
           range_type TEXT PRIMARY KEY,
           angle_min REAL NOT NULL,

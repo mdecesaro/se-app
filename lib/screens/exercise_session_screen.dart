@@ -1,28 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/exercise.dart';
 import '../models/evaluation_result.dart';
 import '../services/bluetooth_service.dart';
 import '../services/database_service.dart';
-
-class SensorDefinition {
-  final int id;
-  final double x;
-  final double y;
-  final String sector;
-  final String expectedFoot;
-
-  SensorDefinition({
-    required this.id,
-    required this.x,
-    required this.y,
-    required this.sector,
-    required this.expectedFoot
-  });
-}
+import 'mat_painter.dart';
 
 class ExerciseSessionScreen extends StatefulWidget {
   final Exercise exercise;
@@ -37,7 +21,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   final AppBluetoothService _bluetoothService = AppBluetoothService();
   StreamSubscription? _eventSubscription;
 
-  // Sensors and Stats
   List<SensorDefinition> _sensorDefinitions = [];
   final List<String> executionLog = [];
   final ScrollController _logScrollController = ScrollController();
@@ -48,17 +31,14 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
   Timer? _timer;
   String formattedTime = "00:00.0";
 
-  // Stats from Hardware
   int _hits = 0;
   int _misses = 0;
   int _totalSessionMs = 0;
 
-  // 🧠 Estruturas de Estado Locais (Removido 'final' para permitir quebra de referência)
   Set<int> _activeTargets = {};
-  Map<int, String> _activeDistractors = {}; // ID -> HexColor
+  Map<int, String> _activeDistractors = {};
   String _correctColor = "#00FF00";
 
-  // 📸 SNAPSHOT BLINDADO: Cache estável dos estímulos para gravação no banco
   List<int> _currentAttemptTargets = [];
   String _currentAttemptTargetColor = "#00FF00";
   List<int> _currentAttemptDistractors = [];
@@ -98,45 +78,28 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     try {
       final db = await DatabaseService().database;
       final List<Map<String, dynamic>> maps = await db.query('sensors');
-
-      debugPrint('=== 📂 [DATABASE] LENDO TABELA SENSORS ===');
-      debugPrint('Total de registros encontrados no SQLite: ${maps.length}');
-
       final List<SensorDefinition> loadedSensors = [];
 
       for (var m in maps) {
         final int? sensorId = m['sensor'];
-        final String sector = m['sector'] ?? "unknown";
-        final String expectedFoot = m['expected_foot'] ?? "unknown";
-
-        debugPrint('  📍 Carregado -> ID Físico (sensor): $sensorId | Setor: $sector | Pé Esperado: $expectedFoot');
-
         if (sensorId != null) {
           loadedSensors.add(SensorDefinition(
             id: sensorId,
             x: (m['x_c'] as num).toDouble(),
             y: (m['y_c'] as num).toDouble(),
-            sector: sector,
-            expectedFoot: expectedFoot,
+            sector: m['sector'] ?? "unknown",
+            expectedFoot: m['expected_foot'] ?? "unknown",
           ));
         }
       }
-
-      setState(() {
-        _sensorDefinitions = loadedSensors;
-      });
-
-      debugPrint('✅ [LOAD COMPLETE] _sensorDefinitions populado com ${_sensorDefinitions.length} sensores.');
-      debugPrint('=========================================');
-
+      setState(() => _sensorDefinitions = loadedSensors);
     } catch (e) {
-      debugPrint('❌ [ERROR] Erro ao carregar sensores: $e');
+      debugPrint('Error loading sensors: $e');
     }
   }
 
   void _setupDataListener() {
     _eventSubscription?.cancel();
-
     _eventSubscription = _bluetoothService.eventStream.listen((event) {
       if (event.type == SensorEventType.end && event.totalMs == 0) {
         _resetSessionUI();
@@ -171,6 +134,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
     switch (event.type) {
       case SensorEventType.ack:
+      // 🟢 Correção: Se o hardware mandou ACK e estávamos esperando a config subir
         if (_isWaitingForSet) {
           _onSetConfirmed();
         }
@@ -191,9 +155,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
       case SensorEventType.animationStep:
         if (_countdownValue != event.countdownValue) {
-          setState(() {
-            _countdownValue = event.countdownValue;
-          });
+          setState(() => _countdownValue = event.countdownValue);
           _addLog("⏳ Step: ${event.countdownValue}");
         }
         break;
@@ -205,29 +167,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         break;
 
       case SensorEventType.on:
-      // 🧪 TELEMETRIA DE ENTRADA (Console do Desenvolvedor)
-        debugPrint("=========================================================");
-        debugPrint("🟢 [BLUETOOTH INCOMING] Evento ON Recebido!");
-        debugPrint("  -> event.sensorId bruto: ${event.sensorId}");
-        debugPrint("  -> event.color raw list: ${event.color}");
-        debugPrint("  -> event.distractors map: ${event.distractors}");
-        debugPrint("=========================================================");
-
         setState(() {
-          // ✅ Nova instância força a mudança de referência para o shouldRepaint
           _activeTargets = {};
           _activeDistractors = {};
 
-          // 1. Decodificação da Cor do Alvo Principal
           final color = event.color;
           if (color != null && color.length >= 3) {
             _correctColor = '#${color[0].toRadixString(16).padLeft(2, '0')}'
                 '${color[1].toRadixString(16).padLeft(2, '0')}'
                 '${color[2].toRadixString(16).padLeft(2, '0')}'.toUpperCase();
-            debugPrint("🎨 Cor do Alvo Decodificada: $_correctColor");
           }
 
-          // 2. Extração dos IDs dos Alvos
           if (color != null && color.length > 3) {
             for (int i = 3; i < color.length; i++) {
               _activeTargets.add(color[i]);
@@ -235,24 +185,17 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
           } else if (event.sensorId > 0) {
             _activeTargets.add(event.sensorId);
           }
-          debugPrint("🎯 IDs dos Alvos Ativados no Estado: $_activeTargets");
 
-          // 3. Extração dos Distratores
           if (event.distractors != null) {
             _activeDistractors.addAll(Map<int, String>.from(event.distractors!));
           }
-          debugPrint("👾 Distratores Ativados no Estado: $_activeDistractors");
 
-          // 📸 Atualiza o Snapshot Blindado para o Banco
           _currentAttemptTargets = _activeTargets.toList();
           _currentAttemptTargetColor = _correctColor;
           _currentAttemptDistractors = _activeDistractors.keys.toList();
           _currentAttemptDistractorColors = _activeDistractors.values.toList();
         });
-
         _addLog("Targets ON: Sensors ${_activeTargets.join(', ')}");
-        debugPrint("📱 FLUTTER UI: Estado atualizado e frame solicitado via setState.");
-        debugPrint("=========================================================");
         break;
 
       case SensorEventType.hit:
@@ -267,12 +210,9 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
-
         _addLog("HIT! Sensor ${event.sensorId} - RT: ${event.reactionTime}ms");
-
         setState(() {
           _hits++;
-          // ✅ Substituição por nova instância limpa: força repintura imediata
           _activeTargets = {};
           _activeDistractors = {};
         });
@@ -290,13 +230,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
             stimuliStart: event.stimuliStart ?? 0,
             stimuliEnd: event.stimuliEnd ?? 0
         );
-
         final String errorName = event.errorType == 2 ? 'TIMEOUT' : 'WRONG SENSOR';
         _addLog("MISS! [$errorName] at Pod: ${event.wrongSensorId}");
-
         setState(() {
           _misses++;
-          // ✅ Substituição por nova instância limpa: força repintura imediata
           _activeTargets = {};
           _activeDistractors = {};
         });
@@ -307,7 +244,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _addLog("🏁 Session Summary: ${event.hits} hits, ${event.misses} misses");
         _finishSession();
         break;
-
       default:
         break;
     }
@@ -329,16 +265,14 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         _results = [];
         _activeTargets = {};
         _activeDistractors = {};
-
         _currentAttemptTargets = [];
         _currentAttemptTargetColor = params['target_rgb_hex'] ?? "#00FF00";
         _currentAttemptDistractors = [];
         _currentAttemptDistractorColors = [];
-
         _sessionGuid = "${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999)}";
         formattedTime = "00:00.0";
+        _countdownValue = -1; // 🟢 Inicializa limpo
         _correctColor = params['target_rgb_hex'] ?? "#00FF00";
-
         _addLog("➡️ Sending Binary Configuration...");
       });
 
@@ -347,6 +281,12 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         setState(() => _isSessionStarted = false);
         return;
       }
+
+      // 🟢 IMPORTANTE: Força o barramento do service a saber que a janela ativa de UI
+      // para handshakes e retornos agora pertence a ESTA instância de tela!
+      _bluetoothService.performHandshake(() {
+        if (mounted) setState(() {});
+      });
 
       await _bluetoothService.sendStartGame(
         gameMode: params['game_mode'] ?? 1,
@@ -358,9 +298,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         distMode: params['dist_mode'] ?? 0,
         distQty: params['dist_qty'] ?? 0,
         distBehavior: params['dist_behavior'] ?? 0,
-        distRGBsHex: (params['dist_rgbs_hex'] is List)
-            ? List<String>.from(params['dist_rgbs_hex'])
-            : [],
+        distRGBsHex: (params['dist_rgbs_hex'] is List) ? List<String>.from(params['dist_rgbs_hex']) : [],
         delayType: params['delay_type'] ?? 1,
         delayMinMs: params['delay_min_ms'] ?? 500,
         delayMaxMs: params['delay_max_ms'] ?? 500,
@@ -376,12 +314,10 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
 
   void _onSetConfirmed() {
     if (!mounted || !_isWaitingForSet) return;
-
     setState(() {
       _isWaitingForSet = false;
       _countdownValue = 5;
     });
-
     _addLog("✔️ Configuration applied. Starting countdown...");
   }
 
@@ -445,9 +381,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         'dist_mode': params['dist_mode'] ?? 0,
         'dist_behavior': params['dist_behavior'] ?? 0,
         'dist_qty': params['dist_qty'] ?? 0,
-        'dist_rgbs_hex': (params['dist_rgbs_hex'] is List)
-            ? json.encode(params['dist_rgbs_hex'])
-            : json.encode([]),
+        'dist_rgbs_hex': (params['dist_rgbs_hex'] is List) ? json.encode(params['dist_rgbs_hex']) : json.encode([]),
         'hits': _hits,
         'errors': _misses,
         'avg_reaction_time': avgRT,
@@ -458,7 +392,6 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       _addLog("💾 Session saved to database.");
     } catch (e) {
       _addLog("❌ Error saving to database: $e");
-      debugPrint("Save Error: $e");
     }
   }
 
@@ -488,7 +421,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
     required int stimuliStart,
     required int stimuliEnd
   }) {
-    final result = EvaluationResult(
+    _results.add(EvaluationResult(
       roundNum: round,
       attemptNum: attempt,
       stimulusStart: stimuliStart,
@@ -502,20 +435,20 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       distractorColorsHex: _currentAttemptDistractorColors,
       hitSensorId: hitSensorId,
       errorType: errorType,
-    );
-
-    _results.add(result);
+    ));
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    // 🟢 CRÍTICO: Cancela explicitamente a escuta do stream BLE. Isso impede
+    // que esta tela continue rodando e interceptando respostas fantasiadas em background!
     _eventSubscription?.cancel();
+    _eventSubscription = null;
+
     _logScrollController.dispose();
     _logNotifier.dispose();
-    if (_isSessionStarted) {
-      _bluetoothService.sendStopGame();
-    }
+    if (_isSessionStarted) _bluetoothService.sendStopGame();
     super.dispose();
   }
 
@@ -563,9 +496,7 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
                         child: Center(
                           child: Stack(
                             children: [
-                              _isSessionStarted
-                                  ? _buildCanvas()
-                                  : _buildStartOverlay(),
+                              _isSessionStarted ? _buildCanvas() : _buildStartOverlay(),
                               if (_isSessionStarted && !stopwatch.isRunning && !_isFinished)
                                 _buildCountdownOverlay(),
                             ],
@@ -706,16 +637,13 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           return RepaintBoundary(
-            child: StreamBuilder<Int32List>(
-              stream: _bluetoothService.pressureStream,
-              initialData: _bluetoothService.pressureCache,
+            child: StreamBuilder<SensorEvent>(
+              stream: _bluetoothService.eventStream,
               builder: (context, snapshot) {
-                final values = snapshot.data ?? _bluetoothService.pressureCache;
                 return CustomPaint(
                   size: Size(constraints.maxWidth, constraints.maxHeight),
                   painter: MatPainter(
                     sensors: _sensorDefinitions,
-                    values: values,
                     activeTargets: _activeTargets,
                     correctColor: _correctColor,
                     distractors: _activeDistractors,
@@ -765,170 +693,5 @@ class _ExerciseSessionScreenState extends State<ExerciseSessionScreen> {
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
       ],
     );
-  }
-}
-
-class MatPainter extends CustomPainter {
-  final List<SensorDefinition> sensors;
-  final List<int> values;
-  final Set<int> activeTargets;
-  final String correctColor;
-  final Map<int, String> distractors;
-
-  MatPainter({
-    required this.sensors,
-    required this.values,
-    required this.activeTargets,
-    required this.correctColor,
-    required this.distractors,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final double scale = size.shortestSide / 75;
-
-    final double hexSize = 7.5 * scale;
-    final double rectWidth = 6.0 * scale;
-    final double rectHeight = 1.2 * scale;
-    final double rectOffsetDeltaY = -4.5 * scale;
-
-    Color parseColor(String colorStr, Color fallback) {
-      try {
-        String hex = colorStr.replaceAll('#', '');
-        if (hex.length == 6) {
-          return Color(int.parse("0xFF$hex"));
-        }
-        return fallback;
-      } catch (_) {
-        return fallback;
-      }
-    }
-
-    final Color targetColor = parseColor(correctColor, Colors.orange);
-
-    for (var sensor in sensors) {
-      final pos = Offset(center.dx + (sensor.x * scale), center.dy + (sensor.y * scale));
-
-      int val = sensor.id <= values.length ? values[sensor.id - 1] : 0;
-      bool isPressed = val > 100;
-
-      bool isTarget = activeTargets.contains(sensor.id);
-      bool isDistractor = distractors.containsKey(sensor.id);
-
-      Color activeColor = targetColor;
-      if (isDistractor) {
-        activeColor = parseColor(distractors[sensor.id]!, Colors.red);
-      }
-
-      final hexPaint = Paint()
-        ..color = isPressed
-            ? activeColor.withOpacity((val / 1023.0).clamp(0.4, 0.9))
-            : Colors.white.withOpacity(0.02)
-        ..style = PaintingStyle.fill;
-
-      final hexOutlinePaint = Paint()
-        ..color = isTarget
-            ? Colors.orangeAccent
-            : isDistractor
-            ? activeColor.withOpacity(0.5)
-            : Colors.orange.withOpacity(0.1)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = (isTarget || isDistractor) ? 2.0 : 0.8;
-
-      _drawHex(canvas, pos, hexSize, hexPaint, hexOutlinePaint);
-
-      final rectPaint = Paint()
-        ..color = (isTarget || isDistractor)
-            ? activeColor
-            : isPressed
-            ? activeColor.withOpacity(0.8)
-            : Colors.white.withOpacity(0.05)
-        ..style = PaintingStyle.fill;
-
-      final rect = Rect.fromCenter(
-        center: Offset(pos.dx, pos.dy + rectOffsetDeltaY),
-        width: rectWidth,
-        height: rectHeight,
-      );
-
-      if (isTarget || isDistractor) {
-        final shadowPaint = Paint()
-          ..color = activeColor.withOpacity(0.4)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * scale);
-
-        canvas.drawRRect(
-            RRect.fromRectAndRadius(
-              Rect.fromCenter(
-                center: Offset(pos.dx, pos.dy + rectOffsetDeltaY),
-                width: rectWidth + (1.0 * scale),
-                height: rectHeight + (1.0 * scale),
-              ),
-              Radius.circular(1.5 * scale),
-            ),
-            shadowPaint
-        );
-      }
-
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(rect, Radius.circular(1.0 * scale)),
-          rectPaint
-      );
-
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: '${sensor.id}',
-          style: TextStyle(
-              color: isPressed ? Colors.white : Colors.white24,
-              fontSize: 4.5 * scale,
-              fontWeight: FontWeight.bold
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      textPainter.paint(canvas, pos - Offset(textPainter.width / 2, -textPainter.height / 6));
-    }
-  }
-
-  void _drawHex(Canvas canvas, Offset center, double size, Paint fill, Paint stroke) {
-    final path = Path();
-    final double roundingDist = size * 0.1;
-
-    List<Offset> vertices = [];
-    for (int i = 0; i < 6; i++) {
-      double angle = i * 60 * math.pi / 180;
-      vertices.add(Offset(
-        center.dx + size * math.cos(angle),
-        center.dy + size * math.sin(angle),
-      ));
-    }
-
-    for (int i = 0; i < 6; i++) {
-      Offset pPrev = vertices[(i + 5) % 6];
-      Offset pCurr = vertices[i];
-      Offset pNext = vertices[(i + 1) % 6];
-
-      Offset p1 = pCurr + (pPrev - pCurr) * (roundingDist / size);
-      Offset p2 = pCurr + (pNext - pCurr) * (roundingDist / size);
-
-      if (i == 0) {
-        path.moveTo(p1.dx, p1.dy);
-      } else {
-        path.lineTo(p1.dx, p1.dy);
-      }
-      path.quadraticBezierTo(pCurr.dx, pCurr.dy, p2.dx, p2.dy);
-    }
-    path.close();
-    canvas.drawPath(path, fill);
-    canvas.drawPath(path, stroke);
-  }
-
-  @override
-  bool shouldRepaint(covariant MatPainter oldDelegate) {
-    return oldDelegate.activeTargets != activeTargets ||
-        oldDelegate.correctColor != correctColor ||
-        oldDelegate.values != values ||
-        oldDelegate.distractors != distractors ||
-        oldDelegate.sensors != sensors;
   }
 }
