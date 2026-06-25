@@ -9,7 +9,6 @@ import 'package:permission_handler/permission_handler.dart';
 // Domain types
 // ---------------------------------------------------------------------------
 
-// ✂️ REMOVIDO: clearScreen removido do ciclo de vida dos eventos de sensores
 enum SensorEventType { on, hit, miss, end, countdown, animationStep, countdownEnded, ack, nack }
 
 class SensorEvent {
@@ -60,25 +59,19 @@ class SensorEvent {
 abstract final class _Protocol {
   static const int sof            = 0xAA;
 
-  // Host-to-Device Command Codes mirrored perfectly from C++ firmware (V1.4.0)
   static const int cmdConnect     = 0x01;
   static const int cmdDisconnect  = 0x02;
-  static const int cmdSetGame     = 0x03; // Config + Start are now one atomic action!
-  static const int cmdStopGame    = 0x04; // Emergency Intercept Code
+  static const int cmdSetGame     = 0x03;
+  static const int cmdStopGame    = 0x04;
 
-  // Control bytes (device → host)
   static const int msgAck         = 0x06;
   static const int msgNack        = 0x15;
 
-  // Resposta oficial de Handshake Aceito vinda do Arduino
   static const int resConnectSuccess = 0x81;
 
-  // Event codes (device → host)
-  // ✂️ REMOVIDO: evtClearScreen (0x1A) deletado do escopo do protocolo
   static const int evtOn               = 0x10;
   static const int evtHit              = 0x11;
   static const int evtMiss             = 0x12;
-  static const int evtPressure         = 0x14;
   static const int evtCountdownStarted = 0x16;
   static const int evtAnimationStep    = 0x17;
   static const int evtCountdownEnded   = 0x18;
@@ -87,8 +80,6 @@ abstract final class _Protocol {
 
   static const int maxBufferBytes  = 64 * 1024;
   static const int initialBufSize  =  8 * 1024;
-  static const int pressureSensors = 14;
-
   static const String dataCharFragment = 'dfb1';
 }
 
@@ -108,13 +99,11 @@ class _FrameParser {
   _FrameParser({
     required this.onLine,
     required this.onEvent,
-    required this.onPressure,
     required this.onHandshake,
   });
 
   final void Function(String line)                                   onLine;
   final void Function(SensorEvent event)                             onEvent;
-  final void Function(Int32List snapshot)                            onPressure;
   final void Function(String deviceId, int podCount, String version) onHandshake;
 
   int? _firstHardwareEndTS;
@@ -127,17 +116,10 @@ class _FrameParser {
   bool            _parsing   = false;
   final List<List<int>> _feedQueue = [];
 
-  final List<Int32List> _pPool = List.generate(8, (_) => Int32List(_Protocol.pressureSensors));
-  int _pIdx = 0;
-
   void reset() {
     _len       = 0;
     _parsing   = false;
     _feedQueue.clear();
-    for (final b in _pPool) {
-      b.fillRange(0, _Protocol.pressureSensors, 0);
-    }
-    _pIdx         = 0;
     _handshakeDone = false;
 
     _firstHardwareEndTS   = null;
@@ -187,8 +169,7 @@ class _FrameParser {
       if (byte == _Protocol.msgAck || byte == _Protocol.msgNack) {
         final bool isAck = (byte == _Protocol.msgAck);
         onLine(isAck ? 'ACK' : 'NACK');
-        onEvent(SensorEvent(
-            type: isAck ? SensorEventType.ack : SensorEventType.nack));
+        onEvent(SensorEvent(type: isAck ? SensorEventType.ack : SensorEventType.nack));
         cursor++;
         continue;
       }
@@ -201,23 +182,13 @@ class _FrameParser {
         final payloadLen = _buf[cursor + 2];
         final totalLen   = 3 + payloadLen + 1;
 
-        debugPrint("[DEBUG BLE] Chegou SOF! Cmd: 0x${cmdId.toRadixString(16)}, Len: $payloadLen, Total Esperado: $totalLen, No Buffer: $remaining");
-
-        if (remaining < totalLen) {
-          debugPrint("[DEBUG BLE] Pacote incompleto no buffer. Aguardando mais bytes...");
-          break;
-        }
-
-
-
-
         if (remaining < totalLen) break;
 
         int crc = 0;
         for (int i = 0; i < totalLen; i++) {
           crc ^= _buf[cursor + i];
         }
-        debugPrint("[DEBUG BLE] Validação do CRC para Cmd 0x${cmdId.toRadixString(16)}: ${crc == 0 ? 'CORRETO (0)' : 'FALHOU ($crc)'}");
+
         if (crc == 0) {
           if (cmdId == _Protocol.resConnectSuccess && !_handshakeDone) {
             final result = _tryParseHandshake(cursor);
@@ -251,9 +222,7 @@ class _FrameParser {
         if (end != -1) {
           final isNewline = _buf[end] == 10;
           try {
-            final line = utf8
-                .decode(Uint8List.sublistView(_buf, cursor, end))
-                .trim();
+            final line = utf8.decode(Uint8List.sublistView(_buf, cursor, end)).trim();
             if (line.isNotEmpty) {
               onLine(line);
             }
@@ -296,41 +265,24 @@ class _FrameParser {
   }
 
   void _handleBinaryPacket(int cmd, int offset, int len) {
-    final int nowDigital = DateTime.now().millisecondsSinceEpoch;
-
     final data = ByteData.sublistView(_buf, offset, offset + len);
 
     switch (cmd) {
       case _Protocol.evtGameStarted:
         _firstHardwareEndTS = null;
         _firstDigitalTimestamp = null;
-        if (kDebugMode) debugPrint('[Parser] ⏱️ EVT_GAME_STARTED recebido! Âncoras de latência resetadas.');
         break;
       case _Protocol.evtCountdownStarted:
         final val = len > 0 ? data.getUint8(0) : 5;
         onEvent(SensorEvent(type: SensorEventType.countdown, countdownValue: val));
         break;
-
       case _Protocol.evtAnimationStep:
         final val = len > 0 ? data.getUint8(0) : 0;
         onEvent(SensorEvent(type: SensorEventType.animationStep, countdownValue: val));
         break;
-
       case _Protocol.evtCountdownEnded:
         onEvent(SensorEvent(type: SensorEventType.countdownEnded, countdownValue: 0));
         break;
-
-      case _Protocol.evtPressure:
-        if (len >= _Protocol.pressureSensors * 2) {
-          final buf = _pPool[_pIdx];
-          _pIdx = (_pIdx + 1) % _pPool.length;
-          for (int i = 0; i < _Protocol.pressureSensors; i++) {
-            buf[i] = data.getUint16(i * 2, Endian.little);
-          }
-          onPressure(buf);
-        }
-        break;
-
       case _Protocol.evtOn:
         if (len >= 5) {
           final int targetQty = data.getUint8(0);
@@ -342,8 +294,7 @@ class _FrameParser {
           final List<int> targetPods = [];
           for (int i = 0; i < targetQty; i++) {
             if (cursor < len) {
-              final int rawPodId = data.getUint8(cursor++);
-              targetPods.add(rawPodId + 1);
+              targetPods.add(data.getUint8(cursor++) + 1);
             }
           }
 
@@ -381,39 +332,17 @@ class _FrameParser {
           final int roundIdx = data.getUint8(0);
           final int attempt  = data.getUint8(1);
           final int podId    = data.getUint8(2);
-
-          final int normalizedPodId = podId + 1;
-
           final int rt           = data.getUint32(3, Endian.big);
           final int startTS      = data.getUint32(7, Endian.big);
           final int endTS        = data.getUint32(11, Endian.big);
           final int gct          = data.getUint16(15, Endian.big);
           final int delayApplied = data.getUint16(17, Endian.big);
 
-          if (_firstHardwareEndTS == null) {
-            _firstHardwareEndTS = endTS;
-            _firstDigitalTimestamp = nowDigital;
-          }
-
-          final int hwElapsed  = (endTS - _firstHardwareEndTS!) & 0xFFFFFFFF;
-          final int digElapsed = nowDigital - _firstDigitalTimestamp!;
-          final int bleDelta   = digElapsed - hwElapsed;
-
-          if (kDebugMode) {
-            debugPrint('=== BLE TRANSPORT DELTA (HIT) ===');
-            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID Real: $normalizedPodId');
-            debugPrint('Reaction Time (hw): ${rt}ms');
-            debugPrint('GCT:               ${gct}ms');
-            debugPrint('Delay Applied:     ${delayApplied}ms');
-            debugPrint('🚨 BLE delta:      ${bleDelta}ms');
-            debugPrint('=================================');
-          }
-
           onEvent(SensorEvent(
             type:         SensorEventType.hit,
             roundnum:     roundIdx,
             attempt:      attempt,
-            sensorId:     normalizedPodId,
+            sensorId:     podId + 1,
             reactionTime: rt,
             gct:          gct,
             delayApplied: delayApplied,
@@ -428,34 +357,13 @@ class _FrameParser {
           final int roundIdx          = data.getUint8(0);
           final int attempt           = data.getUint8(1);
           final int rawPodId          = data.getUint8(2);
-
           final int normalizedPodId   = (rawPodId == 255) ? 255 : (rawPodId + 1);
           final int errorTypeResolved    = (rawPodId == 255) ? 2 : 1;
-
           final int rxTime            = data.getUint32(3, Endian.big);
           final int startTS           = data.getUint32(7, Endian.big);
           final int endTS             = data.getUint32(11, Endian.big);
           final int gct               = data.getUint16(15, Endian.big);
           final int delayApplied      = data.getUint16(17, Endian.big);
-
-          if (_firstHardwareEndTS == null) {
-            _firstHardwareEndTS = endTS;
-            _firstDigitalTimestamp = nowDigital;
-          }
-
-          final int hwElapsed  = (endTS - _firstHardwareEndTS!) & 0xFFFFFFFF;
-          final int digElapsed = nowDigital - _firstDigitalTimestamp!;
-          final int bleDelta   = digElapsed - hwElapsed;
-
-          if (kDebugMode) {
-            debugPrint('=== BLE TRANSPORT DELTA (MISS) ===');
-            debugPrint('Round: $roundIdx | Tentativa: $attempt | Pod ID: $normalizedPodId');
-            debugPrint('Tempo Reação: ${rxTime}ms');
-            debugPrint('GCT: ${gct}ms');
-            debugPrint('Delay Applied:     ${delayApplied}ms');
-            debugPrint('🚨 BLE delta:  ${bleDelta}ms');
-            debugPrint('==================================');
-          }
 
           onEvent(SensorEvent(
             type:          SensorEventType.miss,
@@ -474,7 +382,6 @@ class _FrameParser {
         break;
 
       case _Protocol.evtGameEnded:
-        if (kDebugMode) debugPrint('[Parser] 🏁 EVT_GAME_ENDED recebido!');
         onEvent(SensorEvent(type: SensorEventType.end));
         break;
     }
@@ -512,8 +419,6 @@ class _FrameParser {
       if (readyMsg == null) return _HandshakeFragment();
 
       onHandshake(deviceId, podCount, version);
-      if (kDebugMode) debugPrint('[BLE] Handshake OK — device: $deviceId  pods: $podCount  fw: $version');
-
       return _HandshakeSuccess(totalLen);
     } catch (_) {
       return _HandshakeInvalid();
@@ -544,6 +449,9 @@ class AppBluetoothService {
   bool _isScanning   = false;
   bool _isConnecting = false;
 
+  // Controla se o fluxo do protocolo de Handshake foi concluído com sucesso
+  bool _isHandshakeOk = false;
+
   fbp.BluetoothDevice?         _connectedDevice;
   fbp.BluetoothCharacteristic? _writeCharacteristic;
   StreamSubscription?          _dataSubscription;
@@ -558,15 +466,11 @@ class AppBluetoothService {
   final _connectionController = StreamController<fbp.BluetoothConnectionState>.broadcast();
   final _lineController       = StreamController<String>.broadcast();
   final _eventController      = StreamController<SensorEvent>.broadcast();
-  final _pressureController   = StreamController<Int32List>.broadcast(sync: true);
-  Int32List _pressureCache    = Int32List(_Protocol.pressureSensors);
 
   Stream<List<int>>                    get dataStream            => _dataController.stream;
   Stream<fbp.BluetoothConnectionState> get connectionStateStream => _connectionController.stream;
   Stream<String>                       get lineStream            => _lineController.stream;
   Stream<SensorEvent>                  get eventStream           => _eventController.stream;
-  Stream<Int32List>                    get pressureStream        => _pressureController.stream;
-  Int32List                            get pressureCache         => _pressureCache;
 
   List<fbp.ScanResult> get scanResults     => List.unmodifiable(_scanResults);
   bool                 get isScanning      => _isScanning;
@@ -576,15 +480,15 @@ class AppBluetoothService {
   String               get registeredUser  => _registeredUser;
   String               get sensorCount     => _sensorCount;
 
+  // Permite que a tela leia se o hardware está pronto operacionalmente
+  bool                 get isHandshakeOk   => _isHandshakeOk;
+  VoidCallback?        _uiUpdateCallback;
+
   late final _FrameParser _parser = _FrameParser(
     onLine: (line) {
       _lineController.add(line);
     },
     onEvent:    _eventController.add,
-    onPressure: (data) {
-      _pressureCache = data;
-      _pressureController.add(data);
-    },
     onHandshake: _applyHandshakeResult,
   );
 
@@ -592,6 +496,10 @@ class AppBluetoothService {
     _deviceType      = deviceId;
     _sensorCount     = podCount.toString();
     _firmwareVersion = version;
+
+    // Sinal Verde: O pacote 0x81 chegou íntegro e foi decodificado
+    _isHandshakeOk   = true;
+    _uiUpdateCallback?.call(); // Força a UI a redesenhar e exibir "Verified & Ready"
   }
 
   void init() => fbp.FlutterBluePlus.setLogLevel(fbp.LogLevel.none);
@@ -603,7 +511,6 @@ class AppBluetoothService {
     await _connectionController.close();
     await _lineController.close();
     await _eventController.close();
-    await _pressureController.close();
   }
 
   Future<void> startScan({VoidCallback? onUpdate}) async {
@@ -667,14 +574,16 @@ class AppBluetoothService {
 
     if (_isConnecting) return;
     if (_connectedDevice?.remoteId == device.remoteId && _writeCharacteristic != null) {
-      debugPrint('[BLE] Already connected to ${device.remoteId}.');
       return;
     }
 
     _isConnecting = true;
+    _uiUpdateCallback = onUpdate; // Vincula o atualizador de estado da UI ativa
 
     try {
-      _applyHandshakeResult('FlyFeet - Hexon', 0, 'Checking...');
+      _isHandshakeOk = false;
+      _firmwareVersion = 'Checking...';
+      _deviceType = 'FlyFeet - Hexon';
       _sensorCount = 'Unknown';
       _parser.reset();
 
@@ -685,36 +594,35 @@ class AppBluetoothService {
           _handleDisconnected();
         } else if (state == fbp.BluetoothConnectionState.connected) {
           _connectedDevice = device;
+          // 🟢 CORREÇÃO: Disparamos o callback aqui! Isso avisa a tela que o link BLE
+          // subiu e força a UI a renderizar o Card Laranja ("Verifying Hardware...")
+          _uiUpdateCallback?.call();
         }
-        onUpdate?.call();
       });
 
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
       try {
         if (Platform.isAndroid) {
-          debugPrint('[BLE] Forçando prioridade de conexão máxima (High Performance) no Android...');
           await device.requestConnectionPriority(
             connectionPriorityRequest: fbp.ConnectionPriority.high,
           );
         }
-      } catch (e) {
-        debugPrint('[BLE] Erro ao solicitar prioridade máxima: $e');
-      }
+      } catch (_) {}
 
       try {
-        debugPrint('[BLE] Requesting expanded link layer MTU configuration (512)...');
         final mtu = await device.requestMtu(512, timeout: 4);
         debugPrint('[BLE MTU] Negotiated MTU: $mtu bytes');
-      } catch (e) {
-        debugPrint('[BLE MTU] Request declined or unhandled by OS layer: $e');
-      }
+      } catch (_) {}
 
       await _discoverAndSubscribe(device, onUpdate);
       await Future.delayed(const Duration(milliseconds: 1000));
       await performHandshake(onUpdate);
     } catch (e, st) {
       debugPrint('[BLE] connect() error: $e\n$st');
+      _isHandshakeOk = false;
+      _isConnecting = false;
+      _uiUpdateCallback?.call();
       rethrow;
     } finally {
       _isConnecting = false;
@@ -742,21 +650,19 @@ class AppBluetoothService {
             _parser.feed(bytes);
             _dataController.add(bytes);
           });
-          debugPrint('[BLE] Subscribed to data characteristic: $uuid');
           return;
         }
       }
     }
-    debugPrint('[BLE] WARNING: no notifiable data characteristic found.');
   }
 
   Future<void> performHandshake([VoidCallback? onUpdate]) async {
     if (_writeCharacteristic == null) return;
     debugPrint('[BLE] Sending CMD_CONNECT (handshake)');
+    _isHandshakeOk = false;
     _parser.reset();
     await _sendBinaryPacket(_Protocol.cmdConnect);
     await Future.delayed(const Duration(milliseconds: 500));
-    onUpdate?.call();
   }
 
   Future<void> disconnect({VoidCallback? onUpdate}) async {
@@ -764,14 +670,49 @@ class AppBluetoothService {
     if (device == null) return;
 
     try {
+      debugPrint('[BLE] Sending CMD_DISCONNECT and waiting for hardware ACK...');
+
+      // 1. Criamos um Completer local para monitorar a chegada do ACK
+      final ackCompleter = Completer<void>();
+
+      // 2. Escuta temporariamente o stream de linhas procurando pelo 'ACK'
+      final subscription = lineStream.listen((line) {
+        if (line == 'ACK' && !ackCompleter.isCompleted) {
+          debugPrint('[BLE] Hardware ACK received for disconnect command.');
+          ackCompleter.complete();
+        }
+      });
+
+      // 3. Dispara o pacote binário
       await _sendBinaryPacket(_Protocol.cmdDisconnect);
-      await _dataSubscription?.cancel();        _dataSubscription       = null;
-      await _connectionSubscription?.cancel();  _connectionSubscription = null;
-      _handleDisconnected();
-      onUpdate?.call();
-      await device.disconnect();
+
+      // 4. Aguarda o ACK do firmware ou estoura um timeout seguro de 1 segundo
+      await ackCompleter.future.timeout(
+        const Duration(milliseconds: 1000),
+        onTimeout: () {
+          debugPrint('[BLE] Timeout waiting for disconnect ACK. Forcing drop.');
+        },
+      );
+
+      // 5. Cancela a inscrição temporária do ACK
+      await subscription.cancel();
+
     } catch (e) {
-      debugPrint('[BLE] disconnect() error: $e');
+      debugPrint('[BLE] Disconnect protocol exception: $e');
+    } finally {
+      // 6. Limpa o estado interno do app e desliga o link BLE físico
+      await _dataSubscription?.cancel();       _dataSubscription = null;
+      await _connectionSubscription?.cancel(); _connectionSubscription = null;
+
+      _handleDisconnected();
+      if (onUpdate != null) onUpdate();
+
+      try {
+        await device.disconnect();
+        debugPrint('[BLE] Physical link destroyed cleanly.');
+      } catch (e) {
+        debugPrint('[BLE] Error forcing core connection drop: $e');
+      }
     }
   }
 
@@ -780,16 +721,18 @@ class AppBluetoothService {
     _writeCharacteristic = null;
     _isConnecting        = false;
     _isScanning          = false;
+    _isHandshakeOk       = false;
     _scanResults.clear();
-    _applyHandshakeResult('FlyFeet - Hexon', 0, 'Checking...');
-    _sensorCount = 'Unknown';
+    _firmwareVersion     = 'Checking...';
+    _deviceType          = 'FlyFeet - Hexon';
+    _sensorCount         = 'Unknown';
     _parser.reset();
 
-    _pressureCache = Int32List(_Protocol.pressureSensors);
-    _pressureController.add(_pressureCache);
-    _eventController.add(SensorEvent(
-      type: SensorEventType.end,
-    ));
+    _eventController.add(SensorEvent(type: SensorEventType.end));
+
+    // 🟢 CORREÇÃO: Executa e depois limpa a referência para evitar memory leak
+    _uiUpdateCallback?.call();
+    _uiUpdateCallback = null;
   }
 
   // ── Game commands ─────────────────────────────────────────────────────────
@@ -817,7 +760,6 @@ class AppBluetoothService {
     payload.setUint8(0, gameMode);
     payload.setUint8(1, gameRounds);
     payload.setUint8(2, gameAttempts);
-
     payload.setUint8(3, targetQty);
     payload.setUint8(4, targetLogic);
 
@@ -848,19 +790,6 @@ class AppBluetoothService {
     payload.setUint8(28, missPolicy);
 
     final rawBytes = payload.buffer.asUint8List(0, 29);
-
-    assert(rawBytes.length == 29, 'CRITICAL: Outbound BLE payload must be exactly 29 bytes!');
-
-    if (rawBytes.length != 29) {
-      if (kDebugMode) debugPrint('[BLE TX ERROR] Blocked malformed payload size: ${rawBytes.length}B');
-      return;
-    }
-
-    if (kDebugMode) {
-      final hexString = rawBytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
-      debugPrint('[BLE TX] Dispatched Verified 29B Payload: $hexString');
-    }
-
     await _sendBinaryPacket(_Protocol.cmdSetGame, rawBytes);
   }
 
@@ -870,10 +799,7 @@ class AppBluetoothService {
 
   Future<void> _sendBinaryPacket(int cmd, [List<int>? payload]) async {
     final char = _writeCharacteristic;
-    if (char == null) {
-      debugPrint('[BLE TX ERROR] 0x${cmd.toRadixString(16).toUpperCase()} failed: Missing write characteristic.');
-      return;
-    }
+    if (char == null) return;
 
     final payloadLen = payload?.length ?? 0;
     final frame      = Uint8List(3 + payloadLen + 1);
@@ -893,14 +819,8 @@ class AppBluetoothService {
 
     try {
       final bool noResponse = char.properties.writeWithoutResponse;
-
       final int platformMtuNow = (_connectedDevice?.mtuNow ?? 23) - 3;
       final int chunkSize = platformMtuNow > 0 ? platformMtuNow : 20;
-
-      if (kDebugMode) {
-        final fullFrameHex = frame.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join('');
-        debugPrint('[BLE TX ATOMIC] Executing frame output: "$fullFrameHex" (Target Segment Limit: ${chunkSize}B)');
-      }
 
       int offset = 0;
       while (offset < frame.length) {

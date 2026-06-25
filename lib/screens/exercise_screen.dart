@@ -42,18 +42,28 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
   }
 
   Future<void> _loadExercises(int categoryId) async {
-    setState(() => _isLoading = true);
-    final db = await DatabaseService().database;
-    final List<Map<String, dynamic>> maps = await db.query(
-      'exercises',
-      where: 'category_id = ? AND active = 1',
-      whereArgs: [categoryId],
-      orderBy: 'level ASC, name ASC',
-    );
-    setState(() {
-      _exercises = maps.map((m) => Exercise.fromMap(m)).toList();
-      _isLoading = false;
-    });
+    // 🟡 REMOVA OU COMENTE ESSA LINHA ABAIXO:
+    // setState(() => _isLoading = true);
+
+    try {
+      final db = await DatabaseService().database;
+      final List<Map<String, dynamic>> maps = await db.query(
+        'exercises',
+        where: 'category_id = ? AND active = 1',
+        whereArgs: [categoryId],
+        orderBy: 'level ASC, name ASC',
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _exercises = maps.map((m) => Exercise.fromMap(m)).toList();
+        _isLoading = false; // Garante que se estivesse carregando algo, agora parou
+      });
+    } catch (e) {
+      debugPrint("Erro ao carregar exercícios: $e");
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -88,10 +98,11 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
           backgroundColor: Colors.transparent,
           elevation: 0,
         ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _selectedCategory == null
-            ? _buildCategoryGrid()
+        // 🟢 LÓGICA CORRIGIDA AQUI:
+        body: _selectedCategory == null
+            ? (_isLoading
+            ? const Center(child: CircularProgressIndicator(color: Colors.orangeAccent))
+            : _buildCategoryGrid())
             : _buildExerciseList(),
       ),
     );
@@ -128,6 +139,24 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
   }
 
   Widget _buildExerciseList() {
+    // 1. Se o banco ainda está processando a busca
+    if (_isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.orangeAccent),
+            SizedBox(height: 16),
+            Text(
+              'Loading exercises...',
+              style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 2. Se a busca terminou e realmente não voltou nada
     if (_exercises.isEmpty) {
       return const Center(
         child: Text(
@@ -137,6 +166,7 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
       );
     }
 
+    // 3. Se achou os exercícios, renderiza a Grid normalmente
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -410,7 +440,11 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: InkWell(
         onTap: () {
-          setState(() => _selectedCategory = category);
+          setState(() {
+            _selectedCategory = category;
+            _exercises = []; // Limpa a lista anterior
+            _isLoading = true; // 🟢 Ativa o loading local para a lista de exercícios
+          });
           _loadExercises(category.id!);
         },
         borderRadius: BorderRadius.circular(20),
